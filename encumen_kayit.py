@@ -2,6 +2,7 @@ import os, sys, re, csv, json, time, base64, calendar, datetime, sqlite3, subpro
 from html import escape as hesc
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
+import modern_tasarim
 
 BASE = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
 DB = os.path.join(BASE, "imar_kayitlari.db")
@@ -421,6 +422,7 @@ class Takvim(tk.Toplevel):
     def __init__(s, parent, deger, ayrac, sonuc, x=None, y=None):
         super().__init__(parent)
         s.title("Tarih Seç")
+        modern_tasarim.tema_uygula(s, KOYU)
         s.resizable(False, False)
         s.ayrac, s.sonuc = ayrac, sonuc
         s.bugun = datetime.date.today()
@@ -439,10 +441,10 @@ class Takvim(tk.Toplevel):
         s.cv.bind("<Motion>", s._hover)
         s.cv.bind("<Leave>", lambda e: s.cv.delete("hov"))
         alt = ttk.Frame(s)
-        alt.pack(pady=(2, 8))
-        ttk.Button(alt, text="Bugün", command=lambda: s.sec(s.bugun.day, s.bugun.month, s.bugun.year)).pack(side="left", padx=3)
-        ttk.Button(alt, text="Temizle", command=lambda: (s.sonuc(""), s.destroy())).pack(side="left", padx=3)
-        ttk.Button(alt, text="İptal", command=s.destroy).pack(side="left", padx=3)
+        alt.pack(pady=(4, 10))
+        ttk.Button(alt, text="Bugün", style="Accent.TButton", command=lambda: s.sec(s.bugun.day, s.bugun.month, s.bugun.year)).pack(side="left", padx=4)
+        ttk.Button(alt, text="Temizle", command=lambda: (s.sonuc(""), s.destroy())).pack(side="left", padx=4)
+        ttk.Button(alt, text="İptal", command=s.destroy).pack(side="left", padx=4)
         s.bind("<Escape>", lambda e: s.destroy())
         s.ciz()
         if x is not None:
@@ -584,25 +586,39 @@ class Form(tk.Toplevel):
     def __init__(s, app, rid=None, kopya=None):
         super().__init__(app.root)
         s.app, s.rid, s.v = app, rid, {}
-        s.title("Yeni kayıt (çoğaltılan satırdan)" if kopya else "Kayıt")
+        koyu = s.app.koyu_var.get()
+        modern_tasarim.tema_uygula(s, koyu)
+        baslik = "Yeni Kayıt (Çoğaltılan Satırdan)" if kopya else ("Kayıt Düzenle" if rid else "Yeni İmar & Encümen Kaydı")
+        s.title(baslik)
+        modern_tasarim.pencere_merkeze_yerlestir(s, 760, 680)
+        s.minsize(660, 560)
+        modern_tasarim.ozel_baslik(s, baslik, koyu, "T.C. Mustafakemalpaşa Belediyesi• İmar Kayıt Formu")
+
+        govde = ttk.Frame(s, padding=(18, 14))
+        govde.pack(fill="both", expand=True)
+
         kaynak = rid or kopya
         row = q(f"SELECT {','.join(KEYS)} FROM kayit WHERE id=?", (kaynak,))[0] if kaynak else None
         for i, (k, l, t) in enumerate(FIELDS):
-            ttk.Label(s, text=l).grid(row=i, column=0, sticky="e", padx=6, pady=3)
+            ttk.Label(govde, text=l).grid(row=i, column=0, sticky="e", padx=(6, 10), pady=3)
             s.v[k] = tk.StringVar(value=(row[i] or "") if row and (not kopya or k in s.KOPYA) else "")
             if t and t.startswith("liste:"):
-                AramaliCombobox(s, (lambda tur=t[6:]: liste(tur)), textvariable=s.v[k], width=57).grid(row=i, column=1, pady=3)
+                AramaliCombobox(govde, (lambda tur=t[6:]: liste(tur)), textvariable=s.v[k], width=46).grid(row=i, column=1, sticky="w", pady=3)
             else:
-                ttk.Entry(s, textvariable=s.v[k], width=60).grid(row=i, column=1, pady=3)
+                ttk.Entry(govde, textvariable=s.v[k], width=48).grid(row=i, column=1, sticky="w", pady=3)
             if t == "dosya":
-                ttk.Button(s, text="Seç", command=lambda k=k: s.pick(k)).grid(row=i, column=2, padx=4)
+                ttk.Button(govde, text="Dosya Seç", command=lambda k=k: s.pick(k)).grid(row=i, column=2, padx=6, sticky="w")
             if k in DATES:
-                ttk.Button(s, text="Takvim", command=lambda k=k: Takvim(s, s.v[k].get(), DATES[k], s.v[k].set)).grid(row=i, column=2, padx=4)
+                ttk.Button(govde, text="Takvim", command=lambda k=k: Takvim(s, s.v[k].get(), DATES[k], s.v[k].set)).grid(row=i, column=2, padx=6, sticky="w")
             if k == "ada_parsel":  # '728/1-2-9-10' gibi yazımlar arka planda ayrı parseller olarak okunur; ipucu yalnızca çoklu parselde görünür
-                s.ap_ipucu = ttk.Label(s, text=parsel_ozeti(s.v[k].get()), foreground=SOLUK, wraplength=300, justify="left")
+                s.ap_ipucu = ttk.Label(govde, text=parsel_ozeti(s.v[k].get()), foreground=SOLUK, wraplength=250, justify="left")
                 s.ap_ipucu.grid(row=i, column=2, sticky="w", padx=6)
                 s.v[k].trace_add("write", lambda *a: s.ap_ipucu.config(text=parsel_ozeti(s.v["ada_parsel"].get())))
-        ttk.Button(s, text="Kaydet", command=s.save, style="Accent.TButton").grid(row=len(FIELDS), column=1, pady=12)
+
+        alt_bar = ttk.Frame(s, padding=(18, 10))
+        alt_bar.pack(fill="x", side="bottom")
+        ttk.Button(alt_bar, text="Kaydet", command=s.save, style="Accent.TButton").pack(side="right", padx=6)
+        ttk.Button(alt_bar, text="İptal", command=s.destroy).pack(side="right", padx=6)
 
     def pick(s, k):
         p = dosya_sec_dialog("karar" if k.startswith("karar") else "makbuz")
@@ -643,19 +659,45 @@ class Listeler(tk.Toplevel):
     def __init__(s, app):
         super().__init__(app.root)
         s.app = app
+        koyu = s.app.koyu_var.get()
+        pal = modern_tasarim.tema_uygula(s, koyu)
         s.title("Seçim Listeleri")
-        s.cb = ttk.Combobox(s, state="readonly", values=list(LT.values()), width=20)
+        modern_tasarim.pencere_merkeze_yerlestir(s, 580, 640)
+        s.minsize(480, 520)
+        modern_tasarim.ozel_baslik(s, "Seçim Listeleri Yönetimi", koyu, "Mahalle, Müellif, İşlem ve Onay Listesi")
+
+        govde = ttk.Frame(s, padding=(18, 14))
+        govde.pack(fill="both", expand=True)
+
+        ust = ttk.Frame(govde)
+        ust.pack(fill="x", pady=(0, 8))
+        ttk.Label(ust, text="Liste Türü:", font=(modern_tasarim.font_ailesi(), 9, "bold")).pack(side="left", padx=(0, 8))
+        s.cb = ttk.Combobox(ust, state="readonly", values=list(LT.values()), width=24)
         s.cb.current(0)
-        s.cb.grid(row=0, column=0, columnspan=2, pady=6)
+        s.cb.pack(side="left")
         s.cb.bind("<<ComboboxSelected>>", lambda e: s.yenile())
-        s.lb = tk.Listbox(s, width=40, height=18)
-        s.lb.grid(row=1, column=0, columnspan=2, padx=6)
+
+        lb_frame = ttk.Frame(govde)
+        lb_frame.pack(fill="both", expand=True, pady=4)
+        s.lb = tk.Listbox(lb_frame, width=40, height=14, relief="flat", highlightthickness=1,
+                          highlightbackground=pal["kenar"], bg=pal["kart"], fg=pal["metin"],
+                          selectbackground=pal["vurgu"], selectforeground="#FFFFFF")
+        lb_sb = ttk.Scrollbar(lb_frame, orient="vertical", command=s.lb.yview)
+        s.lb.configure(yscrollcommand=lb_sb.set)
+        lb_sb.pack(side="right", fill="y")
+        s.lb.pack(side="left", fill="both", expand=True)
+
+        giris_f = ttk.Frame(govde)
+        giris_f.pack(fill="x", pady=(8, 4))
         s.e = tk.StringVar()
-        ttk.Entry(s, textvariable=s.e, width=30).grid(row=2, column=0, pady=4)
-        ttk.Button(s, text="Ekle", command=s.ekle).grid(row=2, column=1)
-        ttk.Button(s, text="Seçileni Sil", command=s.sil).grid(row=3, column=0, pady=4)
-        ttk.Button(s, text="Toplu Ekle", command=s.toplu).grid(row=3, column=1)
-        ttk.Button(s, text="Benzer adları birleştir", command=s.birlestir).grid(row=4, column=0, columnspan=2, pady=(2, 10))
+        ttk.Entry(giris_f, textvariable=s.e, width=32).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ttk.Button(giris_f, text="Ekle", command=s.ekle, style="Accent.TButton").pack(side="left")
+
+        btn_f = ttk.Frame(govde)
+        btn_f.pack(fill="x", pady=6)
+        ttk.Button(btn_f, text="Seçileni Sil", command=s.sil, style="Danger.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(btn_f, text="Toplu Ekle", command=s.toplu).pack(side="left", padx=6)
+        ttk.Button(btn_f, text="Benzer Adları Birleştir", command=s.birlestir).pack(side="right")
         s.yenile()
 
     def kod(s):
@@ -693,9 +735,16 @@ class Listeler(tk.Toplevel):
 
     def toplu(s):
         w = tk.Toplevel(s)
-        w.title("Her satıra bir değer yapıştırın")
-        t = tk.Text(w, width=40, height=20)
-        t.pack(padx=6, pady=6)
+        koyu = s.app.koyu_var.get()
+        pal = modern_tasarim.tema_uygula(w, koyu)
+        w.title("Toplu Değer Ekle")
+        modern_tasarim.pencere_merkeze_yerlestir(w, 480, 440)
+        modern_tasarim.ozel_baslik(w, "Toplu Liste Değeri Ekle", koyu, "Her satıra bir değer yapıştırın")
+        govde = ttk.Frame(w, padding=14)
+        govde.pack(fill="both", expand=True)
+        t = tk.Text(govde, width=40, height=14, bg=pal["kart"], fg=pal["metin"],
+                    highlightthickness=1, highlightbackground=pal["kenar"], relief="flat")
+        t.pack(fill="both", expand=True, pady=(0, 10))
 
         def tamam():
             for satir in t.get("1.0", "end").splitlines():
@@ -703,7 +752,10 @@ class Listeler(tk.Toplevel):
                     q("INSERT OR IGNORE INTO liste VALUES (?,?)", (s.kod(), satir.strip()))
             w.destroy()
             s.yenile()
-        ttk.Button(w, text="Ekle", command=tamam).pack(pady=6)
+        alt = ttk.Frame(govde)
+        alt.pack(fill="x")
+        ttk.Button(alt, text="Listeye Ekle", command=tamam, style="Accent.TButton").pack(side="right", padx=4)
+        ttk.Button(alt, text="İptal", command=w.destroy).pack(side="right")
 
 
 YEDEK_DESEN = re.compile(r"^imar_kayitlari_\d{4}-\d{2}-\d{2}\.db$")
@@ -1045,18 +1097,34 @@ class Silinenler(tk.Toplevel):
     def __init__(s, app):
         super().__init__(app.root)
         s.app = app
-        s.title("Son Silinenler (90 gün saklanır)")
-        s.geometry("940x460")
-        s.tv = ttk.Treeview(s, columns=[k for k, _ in s.SUTUN], show="headings", selectmode="extended")
+        koyu = s.app.koyu_var.get()
+        modern_tasarim.tema_uygula(s, koyu)
+        s.title("Son Silinenler (Geri Dönüşüm Kutusu)")
+        modern_tasarim.pencere_merkeze_yerlestir(s, 1040, 580)
+        s.minsize(820, 440)
+        modern_tasarim.ozel_baslik(s, "Geri Dönüşüm Kutusu • Silinen Kayıtlar", koyu, "Silinen kayıtlar 90 gün boyunca saklanır")
+
+        govde = ttk.Frame(s, padding=(14, 10))
+        govde.pack(fill="both", expand=True)
+
+        kap = ttk.Frame(govde)
+        kap.pack(fill="both", expand=True, pady=(0, 8))
+        s.tv = ttk.Treeview(kap, columns=[k for k, _ in s.SUTUN], show="headings", selectmode="extended")
+        sb = ttk.Scrollbar(kap, orient="vertical", command=s.tv.yview)
+        s.tv.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        s.tv.pack(side="left", fill="both", expand=True)
+
         for k, ad in s.SUTUN:
             s.tv.heading(k, text=ad)
             s.tv.column(k, width=140 if k == "silinme" else 110)
-        s.tv.pack(fill="both", expand=True, padx=10, pady=(10, 6))
-        alt = ttk.Frame(s)
-        alt.pack(fill="x", padx=10, pady=(0, 10))
+
+        alt = ttk.Frame(govde)
+        alt.pack(fill="x")
         ttk.Button(alt, text="Geri Getir", style="Accent.TButton", command=s.geri).pack(side="left")
         ttk.Button(alt, text="Kalıcı Sil", style="Danger.TButton", command=s.kalici).pack(side="left", padx=8)
-        ttk.Label(alt, text="Ctrl/Shift ile birden çok satır seçebilirsiniz.").pack(side="left", padx=10)
+        ttk.Label(alt, text="Ctrl / Shift ile birden çok satır seçebilirsiniz.", style="Sub.TLabel").pack(side="left", padx=10)
+        ttk.Button(alt, text="Kapat", command=s.destroy).pack(side="right")
         s.yenile()
 
     def yenile(s):
@@ -1114,27 +1182,42 @@ class TopluGuncelle(tk.Toplevel):
     def __init__(s, app, ids):
         super().__init__(app.root)
         s.app, s.ids = app, ids
+        koyu = s.app.koyu_var.get()
+        modern_tasarim.tema_uygula(s, koyu)
         s.title(f"Toplu Güncelle ({len(ids)} kayıt)")
+        modern_tasarim.pencere_merkeze_yerlestir(s, 720, 560)
+        s.minsize(620, 480)
+        modern_tasarim.ozel_baslik(s, f"Toplu Güncelleme • {len(ids)} Kayıt Seçili", koyu, "Seçili kayıtlarda yalnızca işaretlenen alanlar güncellenir")
+
         s.sec, s.var = {}, {}
         tur = {f[0]: f[2] for f in FIELDS}
-        ttk.Label(s, text=f"{len(ids)} kayıtta yalnızca işaretlediğiniz alanlar değiştirilir.\n"
-                          "(Değer yazınca kutu kendiliğinden işaretlenir; boş değerle işaretlerseniz alan temizlenir.)"
-                  ).grid(row=0, column=0, columnspan=3, padx=12, pady=(12, 8), sticky="w")
+
+        govde = ttk.Frame(s, padding=(18, 12))
+        govde.pack(fill="both", expand=True)
+
+        bilgi = ttk.Label(govde, text=f"{len(ids)} kayıtta yalnızca işaretlediğiniz alanlar değiştirilir.\n"
+                                     "(Değer yazınca kutu kendiliğinden işaretlenir; boş bırakıp işaretlerseniz alan temizlenir.)",
+                          style="Sub.TLabel", wraplength=660)
+        bilgi.grid(row=0, column=0, columnspan=3, padx=4, pady=(0, 10), sticky="w")
+
         for i, k in enumerate(s.ALANLAR, 1):
             s.sec[k] = tk.BooleanVar(value=False)
             s.var[k] = tk.StringVar()
-            ttk.Checkbutton(s, text=LAB[k], variable=s.sec[k]).grid(row=i, column=0, sticky="w", padx=12, pady=4)
+            ttk.Checkbutton(govde, text=LAB[k], variable=s.sec[k]).grid(row=i, column=0, sticky="w", padx=6, pady=4)
             if tur[k] and tur[k].startswith("liste:"):
-                w = AramaliCombobox(s, (lambda t2=tur[k][6:]: liste(t2)), textvariable=s.var[k], width=30)
+                w = AramaliCombobox(govde, (lambda t2=tur[k][6:]: liste(t2)), textvariable=s.var[k], width=32)
             else:
-                w = ttk.Entry(s, textvariable=s.var[k], width=33)
-            w.grid(row=i, column=1, padx=6, pady=4)
+                w = ttk.Entry(govde, textvariable=s.var[k], width=35)
+            w.grid(row=i, column=1, padx=6, pady=4, sticky="w")
             s.var[k].trace_add("write", lambda *a, k=k: s.sec[k].set(True))
             if k in DATES:
-                ttk.Button(s, text="Takvim", command=lambda k=k: Takvim(s, s.var[k].get(), DATES[k], s.var[k].set)
-                           ).grid(row=i, column=2, padx=6)
-        ttk.Button(s, text="Uygula", style="Accent.TButton", command=s.uygula).grid(
-            row=len(s.ALANLAR) + 1, column=1, pady=14)
+                ttk.Button(govde, text="Takvim", command=lambda k=k: Takvim(s, s.var[k].get(), DATES[k], s.var[k].set)
+                           ).grid(row=i, column=2, padx=6, sticky="w")
+
+        alt_bar = ttk.Frame(s, padding=(18, 10))
+        alt_bar.pack(fill="x", side="bottom")
+        ttk.Button(alt_bar, text="Değişiklikleri Uygula", style="Accent.TButton", command=s.uygula).pack(side="right", padx=6)
+        ttk.Button(alt_bar, text="İptal", command=s.destroy).pack(side="right")
 
     def uygula(s):
         sec = [k for k in s.ALANLAR if s.sec[k].get()]
@@ -1160,24 +1243,35 @@ class RaporAyar(tk.Toplevel):
 
     def __init__(s, app):
         super().__init__(app.root)
+        is_dark = app.koyu_var.get() if hasattr(app, "koyu_var") else KOYU
+        modern_tasarim.tema_uygula(s, is_dark)
         s.title("Rapor başlığı ve imza ayarları")
+        modern_tasarim.pencere_merkeze_yerlestir(s, 720, 540)
+        s.minsize(620, 460)
+        modern_tasarim.ozel_baslik(s, "Rapor Başlığı ve İmza Ayarları", is_dark, "Resmi çıktı ve raporlarda yer alacak kurum bilgileri")
+
+        govde = ttk.Frame(s, padding=(18, 14))
+        govde.pack(fill="both", expand=True)
+
         s.v = {}
         for i, (k, ad) in enumerate(s.ALANLAR):
-            ttk.Label(s, text=ad).grid(row=i, column=0, sticky="e", padx=(14, 6), pady=4)
+            ttk.Label(govde, text=ad).grid(row=i, column=0, sticky="e", padx=(6, 10), pady=4)
             s.v[k] = tk.StringVar(value=ayar("rapor_" + k))
-            ttk.Entry(s, textvariable=s.v[k], width=52).grid(row=i, column=1, columnspan=2, sticky="w", pady=4)
+            ttk.Entry(govde, textvariable=s.v[k], width=48).grid(row=i, column=1, columnspan=2, sticky="w", pady=4)
         n = len(s.ALANLAR)
-        ttk.Label(s, text="Logo (isteğe bağlı)").grid(row=n, column=0, sticky="e", padx=(14, 6), pady=4)
+        ttk.Label(govde, text="Logo (isteğe bağlı)").grid(row=n, column=0, sticky="e", padx=(6, 10), pady=4)
         s.v["logo"] = tk.StringVar(value=ayar("rapor_logo"))
-        ttk.Entry(s, textvariable=s.v["logo"], width=44).grid(row=n, column=1, sticky="w", pady=4)
-        ttk.Button(s, text="Seç", command=s.logo_sec).grid(row=n, column=2, sticky="w", padx=6)
+        ttk.Entry(govde, textvariable=s.v["logo"], width=38).grid(row=n, column=1, sticky="w", pady=4)
+        ttk.Button(govde, text="Dosya Seç", command=s.logo_sec).grid(row=n, column=2, sticky="w", padx=6)
         s.imza = tk.BooleanVar(value=ayar("rapor_imza") != "0")
-        ttk.Checkbutton(s, text="Raporun altına imza alanı ekle (Hazırlayan / Onaylayan)", variable=s.imza).grid(
-            row=n + 1, column=1, columnspan=2, sticky="w", pady=6)
-        alt = ttk.Frame(s)
-        alt.grid(row=n + 2, column=0, columnspan=3, pady=(6, 12))
-        ttk.Button(alt, text="Kaydet", style="Accent.TButton", command=s.kaydet).pack(side="left", padx=6)
-        ttk.Button(alt, text="Önizleme", command=s.onizle).pack(side="left", padx=6)
+        ttk.Checkbutton(govde, text="Raporun altına imza alanı ekle (Hazırlayan / Onaylayan)", variable=s.imza).grid(
+            row=n + 1, column=1, columnspan=2, sticky="w", pady=(8, 4))
+
+        alt = ttk.Frame(s, padding=(18, 10))
+        alt.pack(fill="x", side="bottom")
+        ttk.Button(alt, text="Kaydet", style="Accent.TButton", command=s.kaydet).pack(side="right", padx=6)
+        ttk.Button(alt, text="Örnek Önizleme", command=s.onizle).pack(side="right", padx=6)
+        ttk.Button(alt, text="Kapat", command=s.destroy).pack(side="left")
 
     def logo_sec(s):
         p = filedialog.askopenfilename(title="Logo seçin (PNG veya JPG)", filetypes=[("Resim", "*.png *.jpg *.jpeg")])
@@ -1203,25 +1297,38 @@ class FenIslemDialog(tk.Toplevel):
     def __init__(s, app):
         super().__init__(app.root)
         s.app = app
+        is_dark = s.app.koyu_var.get() if hasattr(s.app, "koyu_var") else KOYU
+        modern_tasarim.tema_uygula(s, is_dark)
         s.title("Fen işlemi ekle")
+        modern_tasarim.pencere_merkeze_yerlestir(s, 700, 540)
+        s.minsize(600, 480)
+        modern_tasarim.ozel_baslik(s, "Yeni Fen İşlemi Tanımla", is_dark, "Parsel Dönüşüm, Tevhit, İfraz ve Değişiklik Kaydı")
+
+        govde = ttk.Frame(s, padding=(18, 14))
+        govde.pack(fill="both", expand=True)
+
         s.v = {k: tk.StringVar() for k in ("mahalle", "tur", "tarih", "eski", "yeni", "not")}
-        ttk.Label(s, text="Mahalle").grid(row=0, column=0, sticky="e", padx=(14, 6), pady=5)
-        AramaliCombobox(s, lambda: liste("mahalle"), textvariable=s.v["mahalle"], width=34).grid(row=0, column=1, sticky="w")
-        ttk.Label(s, text="İşlem türü").grid(row=1, column=0, sticky="e", padx=(14, 6), pady=5)
-        ttk.Combobox(s, textvariable=s.v["tur"], values=s.TURLER, width=34).grid(row=1, column=1, sticky="w")
-        ttk.Label(s, text="İşlem tarihi").grid(row=2, column=0, sticky="e", padx=(14, 6), pady=5)
-        ttk.Entry(s, textvariable=s.v["tarih"], width=36).grid(row=2, column=1, sticky="w")
-        ttk.Button(s, text="Takvim", command=lambda: Takvim(s, s.v["tarih"].get(), ".", s.v["tarih"].set)).grid(row=2, column=2, padx=6)
+        ttk.Label(govde, text="Mahalle").grid(row=0, column=0, sticky="e", padx=(6, 10), pady=5)
+        AramaliCombobox(govde, lambda: liste("mahalle"), textvariable=s.v["mahalle"], width=34).grid(row=0, column=1, sticky="w")
+        ttk.Label(govde, text="İşlem türü").grid(row=1, column=0, sticky="e", padx=(6, 10), pady=5)
+        ttk.Combobox(govde, textvariable=s.v["tur"], values=s.TURLER, width=34).grid(row=1, column=1, sticky="w")
+        ttk.Label(govde, text="İşlem tarihi").grid(row=2, column=0, sticky="e", padx=(6, 10), pady=5)
+        ttk.Entry(govde, textvariable=s.v["tarih"], width=36).grid(row=2, column=1, sticky="w")
+        ttk.Button(govde, text="Takvim", command=lambda: Takvim(s, s.v["tarih"].get(), ".", s.v["tarih"].set)).grid(row=2, column=2, padx=6)
         s.ipucu = {}
         for r, (k, ad) in enumerate((("eski", "Eski parseller"), ("yeni", "Yeni parseller")), 3):
-            ttk.Label(s, text=ad).grid(row=r * 2 - 2, column=0, sticky="e", padx=(14, 6), pady=(5, 0))
-            ttk.Entry(s, textvariable=s.v[k], width=36).grid(row=r * 2 - 2, column=1, sticky="w", pady=(5, 0))
-            s.ipucu[k] = ttk.Label(s, text="", foreground=SOLUK)
+            ttk.Label(govde, text=ad).grid(row=r * 2 - 2, column=0, sticky="e", padx=(6, 10), pady=(5, 0))
+            ttk.Entry(govde, textvariable=s.v[k], width=36).grid(row=r * 2 - 2, column=1, sticky="w", pady=(5, 0))
+            s.ipucu[k] = ttk.Label(govde, text="", foreground=SOLUK)
             s.ipucu[k].grid(row=r * 2 - 1, column=1, sticky="w")
             s.v[k].trace_add("write", lambda *a, k=k: s.ipucu[k].config(text=s.oku(k)))
-        ttk.Label(s, text="Açıklama").grid(row=7, column=0, sticky="e", padx=(14, 6), pady=5)
-        ttk.Entry(s, textvariable=s.v["not"], width=36).grid(row=7, column=1, sticky="w")
-        ttk.Button(s, text="Kaydet", style="Accent.TButton", command=s.kaydet).grid(row=8, column=1, pady=14, sticky="w")
+        ttk.Label(govde, text="Açıklama").grid(row=7, column=0, sticky="e", padx=(6, 10), pady=5)
+        ttk.Entry(govde, textvariable=s.v["not"], width=36).grid(row=7, column=1, sticky="w")
+
+        alt = ttk.Frame(s, padding=(18, 10))
+        alt.pack(fill="x", side="bottom")
+        ttk.Button(alt, text="Kaydet", style="Accent.TButton", command=s.kaydet).pack(side="right", padx=6)
+        ttk.Button(alt, text="İptal", command=s.destroy).pack(side="right")
 
     def oku(s, k):
         o = parsel_ozeti(s.v[k].get())
@@ -1526,16 +1633,20 @@ def mukerrer(d, rid):
     return ""
 
 
-TEMA_ACIK = {"BG": "#f4f6fa", "KART": "#ffffff", "VURGU": "#2563eb", "VURGU_K": "#1d4ed8", "METIN": "#1f2937",
-             "SOLUK": "#6b7280", "KENAR": "#d9dee8", "BASLIK": "#e8edf6", "HOV": "#eaf0fb", "BAS": "#dbe5f7",
-             "SEC": "#bfdbfe", "SB": "#c5ccd8", "SBH": "#a9b2c3", "TEHL": "#fdecec", "KIRMIZI": "#b91c1c",
-             "BHOV": "#dde6f4", "TAKV1": "#dbeafe", "TAKV2": "#e8f0fe",
-             "FEN_ESKI": "#b45309", "FEN_YENI": "#15803d"}
-TEMA_KOYU = {"BG": "#111827", "KART": "#1f2937", "VURGU": "#3b82f6", "VURGU_K": "#2563eb", "METIN": "#e5e7eb",
-             "SOLUK": "#9ca3af", "KENAR": "#374151", "BASLIK": "#273449", "HOV": "#2b3a52", "BAS": "#34476a",
-             "SEC": "#1e40af", "SB": "#4b5563", "SBH": "#6b7280", "TEHL": "#3b1d1d", "KIRMIZI": "#f87171",
-             "BHOV": "#334155", "TAKV1": "#1e3a8a", "TAKV2": "#243b6b",
-             "FEN_ESKI": "#fbbf24", "FEN_YENI": "#4ade80"}
+TEMA_ACIK = {
+    "BG": "#F1F5F9", "KART": "#FFFFFF", "VURGU": "#2563EB", "VURGU_K": "#1D4ED8", "METIN": "#0F172A",
+    "SOLUK": "#64748B", "KENAR": "#CBD5E1", "BASLIK": "#E2E8F0", "HOV": "#DBEAFE", "BAS": "#BFDBFE",
+    "SEC": "#BFDBFE", "SB": "#CBD5E1", "SBH": "#94A3B8", "TEHL": "#FEE2E2", "KIRMIZI": "#DC2626",
+    "BHOV": "#DBEAFE", "TAKV1": "#DBEAFE", "TAKV2": "#EFF6FF",
+    "FEN_ESKI": "#B45309", "FEN_YENI": "#15803D"
+}
+TEMA_KOYU = {
+    "BG": "#0B1120", "KART": "#1E293B", "VURGU": "#3B82F6", "VURGU_K": "#2563EB", "METIN": "#F8FAFC",
+    "SOLUK": "#94A3B8", "KENAR": "#334155", "BASLIK": "#334155", "HOV": "#1E293B", "BAS": "#1E3A8A",
+    "SEC": "#1E3A8A", "SB": "#475569", "SBH": "#64748B", "TEHL": "#451A1A", "KIRMIZI": "#EF4444",
+    "BHOV": "#334155", "TAKV1": "#1E3A8A", "TAKV2": "#243B6B",
+    "FEN_ESKI": "#FBBF24", "FEN_YENI": "#4ADE80"
+}
 # Ekrandaki durum renkleri (raporlar/yazdırma her zaman açık DURUM_RENK'i kullanır)
 DURUM_UI_ACIK = dict(DURUM_RENK)
 DURUM_UI_KOYU = {"Tescilde Bekliyor": "#1d4a2e", "Ödeme Bekleniyor": "#5a4a12", "Encümene Girdi": "#1e3a6b",
@@ -1565,55 +1676,10 @@ RENK = ["#2563eb", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec48
 
 
 def tema_kur(root):
-    root.configure(bg=BG)
-    for ad, v in [("*Font", FONT), ("*Toplevel.background", BG), ("*Listbox.background", KART),
-                  ("*Listbox.selectBackground", VURGU), ("*Listbox.selectForeground", "white"),
-                  ("*Listbox.relief", "flat"), ("*Listbox.highlightThickness", 1), ("*Listbox.highlightColor", KENAR),
-                  ("*Listbox.highlightBackground", KENAR), ("*Text.background", KART), ("*Text.relief", "flat"),
-                  ("*Menu.background", KART), ("*Menu.activeBackground", VURGU), ("*Menu.activeForeground", "white"),
-                  ("*TCombobox*Listbox.background", KART), ("*TCombobox*Listbox.selectBackground", VURGU),
-                  ("*TCombobox*Listbox.selectForeground", "white"),
-                  ("*Listbox.foreground", METIN), ("*TCombobox*Listbox.foreground", METIN),
-                  ("*Text.foreground", METIN), ("*Menu.foreground", METIN), ("*Menu.selectColor", VURGU)]:
-        root.option_add(ad, v)
-    st = ttk.Style()
-    st.theme_use("clam")
-    st.configure(".", background=BG, foreground=METIN, font=FONT, bordercolor=KENAR, focuscolor=BG)
-    st.configure("TFrame", background=BG)
-    st.configure("TLabel", background=BG, foreground=METIN)
-    st.configure("TButton", background=KART, foreground=METIN, bordercolor=KENAR, lightcolor=KART, darkcolor=KART,
-                 padding=(12, 6), relief="flat", borderwidth=1)
-    st.map("TButton", background=[("active", HOV), ("pressed", BAS)])
-    st.configure("Accent.TButton", background=VURGU, foreground="white", bordercolor=VURGU, lightcolor=VURGU, darkcolor=VURGU)
-    st.map("Accent.TButton", background=[("active", VURGU_K), ("pressed", VURGU_K)], foreground=[("active", "white")])
-    st.configure("Danger.TButton", foreground=KIRMIZI)
-    st.map("Danger.TButton", background=[("active", TEHL)])
-    st.configure("TMenubutton", background=KART, foreground=METIN, bordercolor=KENAR, padding=(12, 6), relief="flat",
-                 arrowcolor=SOLUK)
-    st.map("TMenubutton", background=[("active", HOV)])
-    st.configure("TEntry", fieldbackground=KART, foreground=METIN, insertcolor=METIN, bordercolor=KENAR,
-                 lightcolor=KENAR, darkcolor=KENAR, padding=5)
-    st.configure("TSpinbox", fieldbackground=KART, foreground=METIN, background=KART, insertcolor=METIN,
-                 bordercolor=KENAR, lightcolor=KENAR, darkcolor=KENAR, arrowcolor=SOLUK, padding=4)
-    st.configure("TCheckbutton", background=BG, foreground=METIN)
-    st.map("TCheckbutton", background=[("active", BG)], foreground=[("active", METIN)])
-    st.map("TEntry", bordercolor=[("focus", VURGU)], lightcolor=[("focus", VURGU)], darkcolor=[("focus", VURGU)])
-    st.configure("TCombobox", fieldbackground=KART, background=KART, foreground=METIN, insertcolor=METIN,
-                 bordercolor=KENAR, lightcolor=KENAR, darkcolor=KENAR, arrowcolor=SOLUK, padding=4)
-    st.map("TCombobox", fieldbackground=[("readonly", KART)], foreground=[("readonly", METIN)],
-           bordercolor=[("focus", VURGU)],
-           selectbackground=[("readonly", KART)], selectforeground=[("readonly", METIN)])
-    st.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
-    st.configure("TNotebook.Tab", padding=(22, 9), background=BG, foreground=SOLUK, font=("Segoe UI", 10, "bold"), borderwidth=0)
-    st.map("TNotebook.Tab", background=[("selected", KART)], foreground=[("selected", VURGU)])
-    st.configure("Treeview", background=KART, fieldbackground=KART, foreground=METIN, rowheight=round(TABLO_PUNTO * 2.8),
-                 borderwidth=0, font=("Segoe UI", TABLO_PUNTO))
-    st.configure("Treeview.Heading", background=BASLIK, foreground=METIN, font=("Segoe UI", max(9, TABLO_PUNTO), "bold"),
-                 padding=(6, 7), relief="flat", borderwidth=0)
-    st.map("Treeview.Heading", background=[("active", BHOV)])
-    st.map("Treeview", background=[("selected", SEC)], foreground=[("selected", METIN)])
-    st.configure("Vertical.TScrollbar", background=SB, troughcolor=BG, bordercolor=BG, arrowcolor=SOLUK, gripcolor=SB)
-    st.map("Vertical.TScrollbar", background=[("active", SBH)])
+    modern_tasarim.tema_uygula(root, KOYU)
+
+
+KART_RENK = {"acik": "mavi", "encumen": "yesil", "gecik": "kirmizi", "harc": "turuncu", "parsel": "mor"}
 
 
 DONEMLER = ["Son 12 ay", "Son 24 ay", "Bu yıl", "Geçen yıl"]
@@ -1754,7 +1820,7 @@ class App:
     def __init__(s):
         s.root = tk.Tk()
         s.root.title("İmar Uygulamaları - Encümen Karar ve Makbuz Kayıtları")
-        s.root.geometry("1420x780")
+        modern_tasarim.pencere_merkeze_yerlestir(s.root, 1420, 780)
         s.edit, s.son, s.siralama = None, None, None
         s.gizli = 0
         s.gecik_say = 0
@@ -1766,23 +1832,52 @@ class App:
         except ValueError:
             pass
         s.koyu_var = tk.BooleanVar(value=KOYU)
+        s.rozet_var = tk.BooleanVar(value=ayar("rozet") != "0")
+        s._rz_hucre, s._rz_cizgi, s._rz_hdr, s._rid = [], [], 34, None
         s.detay_var = tk.BooleanVar(value=False)
         s.detay_acik = False
         s.sutun_var = {k: tk.BooleanVar(value=True) for k in TV_COLS[1:]}
         s.sutun_goster = list(TV_COLS)
         tema_kur(s.root)
+        modern_tasarim.tema_uygula(s.root, KOYU)
         s.simge_koy()
         s.root.minsize(1000, 560)
-        bnd = tk.Frame(s.root, bg="#1e293b")
+      
+        s.baslik_cubuk = modern_tasarim.ozel_baslik(
+            s.root,
+            "İMAR UYGULAMALARI  |  ENCÜMEN KARAR VE MAKBUZ KAYITLARI",
+            KOYU,
+            kurumsal_alt="T.C. Mustafakemalpaşa Belediyesi• İmar ve Şehircilik Müdürlüğü • Encümen Kayıt Sistemi"
+        )
+
+        bnd = tk.Frame(s.root, bg=BG)
         bnd.pack(fill="x")
-        tk.Label(bnd, text="İmar Uygulamaları", bg="#1e293b", fg="white", font=("Segoe UI", 15, "bold"),
-                 padx=18, pady=11).pack(side="left")
-        tk.Label(bnd, text="Encümen karar ve makbuz kayıtları", bg="#1e293b", fg="#94a3b8").pack(side="left")
-        s.tema_dugme = tk.Label(bnd, text=s.tema_yazi(), bg="#1e293b", fg="#cbd5e1", padx=14, cursor="hand2")
+
+        s.tema_dugme = tk.Label(
+        bnd,
+        text=s.tema_yazi(),
+        bg=BG,
+        fg=METIN,
+        padx=14,
+        pady=9,
+        cursor="hand2",
+        font=("Segoe UI", 9, "bold")
+        )
         s.tema_dugme.pack(side="right")
-        s.tema_dugme.bind("<Button-1>", lambda e: s.tema_degistir())
-        s.bildirim = tk.Label(bnd, text="", bg="#1e293b", fg="#fbbf24", padx=18)
+        s.tema_dugme.bind(
+        "<Button-1>",
+        lambda e: s.tema_degistir()
+        )
+
+        s.bildirim = tk.Label(
+        bnd,
+        text="",
+        bg=BG,
+        fg="#D97706",
+        padx=18
+        )
         s.bildirim.pack(side="right")
+
         s.nb = ttk.Notebook(s.root)
         s.nb.pack(fill="both", expand=True, padx=10, pady=(8, 10))
         sek = ttk.Frame(s.nb)
@@ -1802,23 +1897,24 @@ class App:
             kf.columnconfigure(i, weight=1, uniform="k")
             c = tk.Frame(kf, bg=KART, highlightthickness=1, highlightbackground=KENAR, cursor="hand2")
             c.grid(row=0, column=i, sticky="nsew", padx=4)
-            sayi = tk.Label(c, text="–", bg=KART, fg=METIN, font=("Segoe UI", 20, "bold"), anchor="w")
-            sayi.pack(fill="x", padx=14, pady=(8, 0))
-            tk.Label(c, text=baslik, bg=KART, fg=SOLUK, anchor="w").pack(fill="x", padx=14, pady=(0, 8))
+            sayi = tk.Label(c, text="–", bg=KART, fg=modern_tasarim.stat_renk(KART_RENK[anahtar], KOYU),
+                            font=("Segoe UI", 22, "bold"), anchor="w")
+            sayi.pack(fill="x", padx=16, pady=(12, 0))
+            tk.Label(c, text=baslik, bg=KART, fg=SOLUK, font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=16, pady=(0, 12))
             for w in [c] + c.winfo_children():
                 w.bind("<Button-1>", lambda e, a=anahtar: s.kart_tikla(a))
             s.kartlar[anahtar] = sayi
         top = ttk.Frame(sek)
         top.pack(fill="x", padx=6, pady=(6, 2))
-        ttk.Label(top, text="Ara:").pack(side="left")
+        ttk.Label(top, text="🔍 Ara:").pack(side="left")
         s.ara = tk.StringVar()
         s.ara.trace_add("write", lambda *a: s.load_gecikmeli())
         s.ara_kutu = ttk.Entry(top, textvariable=s.ara, width=24)
         s.ara_kutu.pack(side="left", padx=4)
         s.ara_kutu.bind("<Escape>", lambda e: s.ara.set(""))
-        for t, c in [("Yeni", s.yeni), ("Formda Düzenle", s.duzenle), ("Toplu Güncelle", s.toplu), ("Sil", s.sil),
+        for t, c in [("+ Yeni Kayıt", s.yeni), ("Formda Düzenle", s.duzenle), ("Toplu Güncelle", s.toplu), ("Sil", s.sil),
                      ("Kararı Aç", lambda: s.ac("karar")), ("Makbuzu Aç", lambda: s.ac("makbuz"))]:
-            ttk.Button(top, text=t, command=c, style="Accent.TButton" if t == "Yeni" else (
+            ttk.Button(top, text=t, command=c, style="Accent.TButton" if t == "+ Yeni Kayıt" else (
                 "Danger.TButton" if t == "Sil" else "TButton")).pack(side="left", padx=3)
         ym = tk.Menu(top, tearoff=0)
         ym.add_command(label="Şimdi yedekle", command=s.yedek_simdi)
@@ -1845,6 +1941,7 @@ class App:
         ttk.Menubutton(top, text="Rapor", menu=rm).pack(side="left", padx=2)
         em = tk.Menu(top, tearoff=0)
         em.add_checkbutton(label="Koyu tema", variable=s.koyu_var, command=s.tema_degistir)
+        em.add_checkbutton(label="Modern rozet ve satır çizgileri", variable=s.rozet_var, command=s.rozet_degistir)
         em.add_checkbutton(label="Detay paneli (F3)", variable=s.detay_var, command=s.detay_ac_kapa)
         em.add_separator()
         em.add_command(label="Yazıyı büyüt (Ctrl + tekerlek yukarı  /  Ctrl +)", command=lambda: s.yazi_boyut(1))
@@ -1885,7 +1982,7 @@ class App:
         kap.pack(fill="both", expand=True, padx=6)
         s.tv = ttk.Treeview(kap, columns=TV_COLS, show="headings", selectmode="extended")
         sb = ttk.Scrollbar(kap, orient="vertical", command=s.tv.yview)
-        s.tv.configure(yscrollcommand=sb.set)
+        s.tv.configure(yscrollcommand=lambda a, b: (sb.set(a, b), s.rozet_planla()))
         s.sb = sb
         sb.pack(side="right", fill="y")
         s.tv.pack(side="left", fill="both", expand=True)
@@ -1905,10 +2002,9 @@ class App:
             s.tv.column(k, width=g, anchor="w")
         s.tv.tag_configure("gec", foreground=KIRMIZI)
         s.tv.tag_configure("pas", foreground=KIRMIZI)
-        for i, r in enumerate(DURUM_UI.values()):
-            s.tv.tag_configure(f"d{i}", background=r)
-        s.durum = ttk.Label(sek)
-        s.durum.pack(anchor="w", padx=8, pady=(4, 2))
+        s.durum_tag_ayarla()
+        s.durum = ttk.Label(sek, style="Footer.TLabel")
+        s.durum.pack(fill="x", padx=6, pady=(6, 2))
         lg = ttk.Frame(sek)
         lg.pack(anchor="w", padx=8, pady=(0, 4))
         ttk.Label(lg, text="Renkler:").pack(side="left")
@@ -1932,6 +2028,10 @@ class App:
         s.root.bind("<Control-Key-0>", lambda e: s.yazi_boyut(None))
         s.root.bind("<F3>", lambda e: (s.detay_var.set(not s.detay_var.get()), s.detay_ac_kapa()))
         s.tv.bind("<F2>", lambda e: s.f2())
+        s.tv.bind("<Configure>", lambda e: s.rozet_planla(), add="+")
+        s.tv.bind("<ButtonRelease-1>", lambda e: s.rozet_planla(), add="+")
+        s.tv.bind("<<TreeviewSelect>>", lambda e: s.rozet_planla(), add="+")
+        s.nb.bind("<<NotebookTabChanged>>", lambda e: s.rozet_planla(), add="+")
         s.menu = tk.Menu(s.root, tearoff=0)
         for t, c in [("Bu hücreyi düzenle (F2)", s.f2), ("Satırı formda düzenle", s.duzenle),
                      ("Seçili satırları toplu güncelle...", s.toplu),
@@ -2147,6 +2247,7 @@ class App:
         gc = f"    ·  ⚠ {s.gecik_say} geciken iş" if s.gecik_say else ""
         s.durum.config(text=f"{len(ch)} kayıt    Toplam Alınan Ücret: {para_yaz(toplam)}{gz}{gc}    "
                             "(Çift tıkla: hücre düzenle · Ctrl/Shift ile çoklu seçim → Toplu Güncelle · başlığa tıkla: sırala)")
+        s.rozet_planla()
 
     def sirala(s, k):
         if s.siralama and s.siralama[0] == k:
@@ -2290,6 +2391,8 @@ class App:
         return "◐  Açık tema" if KOYU else "◐  Koyu tema"
 
     def _yeniden_boya(s, w, esle):
+        if getattr(w, "_modern_baslik", False):  # başlık şeridini modern_tasarim.baslik_yenile boyar
+            return
         OPS = ("bg", "fg", "background", "foreground", "activebackground", "activeforeground", "highlightbackground",
                "highlightcolor", "selectbackground", "selectforeground", "insertbackground", "disabledforeground",
                "selectcolor")
@@ -2315,14 +2418,17 @@ class App:
         esle = {eski[k]: yeni[k] for k in eski}
         esle.update({eski_d[k]: DURUM_UI[k] for k in eski_d})
         tema_kur(s.root)
+        modern_tasarim.tema_uygula(s.root, KOYU)
         s._yeniden_boya(s.root, esle)
+        modern_tasarim.baslik_yenile(s.baslik_cubuk, KOYU)
+        s.kart_renk_uygula()
         s.tv.tag_configure("gec", foreground=KIRMIZI)
         s.tv.tag_configure("pas", foreground=KIRMIZI)
-        for i, r in enumerate(DURUM_UI.values()):
-            s.tv.tag_configure(f"d{i}", background=r)
+        s.durum_tag_ayarla()
         s.fen_tv.tag_configure("eski", foreground=FEN_ESKI)
         s.fen_tv.tag_configure("yeni", foreground=FEN_YENI)
         s.koyu_var.set(KOYU)
+        s.rozet_planla()
         s.tema_dugme.config(text=s.tema_yazi())
         s.detay_renk()
         s.ciz_hepsi()
@@ -2340,6 +2446,7 @@ class App:
         st.configure("Treeview.Heading", font=("Segoe UI", max(9, n), "bold"))
         q("INSERT OR REPLACE INTO ayar VALUES (?,?)", ("yazi_boyut", str(n)))
         s.bildir(f"Tablo yazı boyutu: {n}", 1500)
+        s.rozet_planla()
 
     def sutun_uygula(s, kaydet=True):
         s.edit_kapat()
@@ -2411,6 +2518,128 @@ class App:
                     t.insert("end", str(v or "–") + "\n\n", "d")
         t.configure(state="disabled")
 
+    # ---------- Modern görünüm katmanı (yalnızca görsel; veriye dokunmaz) ----------
+    ROZET_SUTUN = ("onay", "alinan_ucret", "karar_ok", "makbuz_ok", "parsel_durum")
+
+    def durum_tag_ayarla(s):
+        """Rozet açıkken satır zemini sade kalır, durum rengi rozette görünür."""
+        for i, r in enumerate(DURUM_UI.values()):
+            s.tv.tag_configure(f"d{i}", background=KART if s.rozet_var.get() else r)
+
+    def rozet_degistir(s):
+        q("INSERT OR REPLACE INTO ayar VALUES (?,?)", ("rozet", "1" if s.rozet_var.get() else "0"))
+        s.durum_tag_ayarla()
+        s.rozet_planla()
+
+    def rozet_planla(s):
+        if getattr(s, "_rid", None) is None:
+            s._rid = s.root.after(25, s.rozet_ciz)
+
+    def rozet_gizle(s, ilk_hucre=0, ilk_cizgi=0):
+        for f, _ in s._rz_hucre[ilk_hucre:]:
+            f.place_forget()
+        for c in s._rz_cizgi[ilk_cizgi:]:
+            c.place_forget()
+
+    def rozet_ciz(s):
+        s._rid = None
+        try:
+            s._rozet_ciz()
+        except Exception:
+            try:
+                s.rozet_gizle()
+            except Exception:
+                pass
+
+    def _rz_ilet(s, w):
+        """Rozetlerin üstüne yapılan tıklama/tekerlek olaylarını tabloya iletir."""
+        def yap(ad):
+            def f(e):
+                kw = dict(x=e.x_root - s.tv.winfo_rootx(), y=e.y_root - s.tv.winfo_rooty(), state=e.state, time=e.time)
+                if ad.endswith("MouseWheel"):
+                    kw["delta"] = e.delta
+                s.tv.event_generate(ad, **kw)
+                return "break"
+            return f
+        for ad in ("<Button-1>", "<ButtonRelease-1>", "<Button-3>", "<MouseWheel>", "<Control-MouseWheel>"):
+            w.bind(ad, yap(ad))
+
+    def _rz_hucre_al(s, no):
+        while len(s._rz_hucre) <= no:
+            f = tk.Frame(s.tv, bd=0, highlightthickness=0)
+            l = tk.Label(f, bd=0)
+            s._rz_ilet(f)
+            s._rz_ilet(l)
+            s._rz_hucre.append((f, l))
+        return s._rz_hucre[no]
+
+    def _rozet_ciz(s):
+        tv = s.tv
+        if not s.rozet_var.get() or not tv.winfo_ismapped():
+            s.rozet_gizle()
+            return
+        cocuk = tv.get_children()
+        n = len(cocuk)
+        if not n:
+            s.rozet_gizle()
+            return
+        try:
+            rh = int(ttk.Style().lookup("Treeview", "rowheight") or 28)
+        except ValueError:
+            rh = 28
+        yuk = tv.winfo_height()
+        ilk = max(0, int(tv.yview()[0] * n) - 1)
+        son = min(n, ilk + yuk // max(16, rh) + 4)
+        if tv.yview()[0] == 0:
+            b0 = tv.bbox(cocuk[0])
+            if b0:
+                s._rz_hdr = b0[1]
+        sec = set(tv.selection())
+        font = ("Segoe UI", TABLO_PUNTO)
+        fkalin = ("Segoe UI", TABLO_PUNTO, "bold")
+        yesil = modern_tasarim.stat_renk("yesil", KOYU)
+        kirmizi = modern_tasarim.stat_renk("kirmizi", KOYU)
+        amber = modern_tasarim.stat_renk("turuncu", KOYU)
+        hn = cn = 0
+        for iid in cocuk[ilk:son]:
+            b = tv.bbox(iid)
+            if not b or b[1] < s._rz_hdr - 2 or b[1] + b[3] > yuk + 1:
+                continue
+            zemin = SEC if iid in sec else KART
+            while len(s._rz_cizgi) <= cn:
+                s._rz_cizgi.append(tk.Frame(tv, height=1, bd=0, highlightthickness=0))
+            c = s._rz_cizgi[cn]
+            c.configure(bg=KENAR)
+            c.place(x=0, y=b[1] + b[3] - 1, relwidth=1, height=1)
+            cn += 1
+            for kol in s.ROZET_SUTUN:
+                cb = tv.bbox(iid, kol)
+                if not cb:
+                    continue
+                v = tv.set(iid, kol)
+                if not v:
+                    continue
+                f, l = s._rz_hucre_al(hn)
+                hn += 1
+                f.configure(bg=zemin)
+                l.pack_forget()
+                if kol == "onay":
+                    l.configure(text=v, bg=DURUM_UI.get(v, BASLIK), fg=METIN, font=("Segoe UI", max(8, TABLO_PUNTO - 1), "bold"), padx=8, pady=1)
+                    l.pack(side="left", padx=6)
+                else:
+                    if kol == "alinan_ucret":
+                        fg, ft, an = yesil, fkalin, "w"
+                    elif kol in ("karar_ok", "makbuz_ok"):
+                        fg, ft, an = (yesil if "✓" in v else kirmizi if "✗" in v else amber), fkalin, "center"
+                    else:
+                        dv = v.strip().lower()
+                        fg = kirmizi if dv.startswith("pasif") else yesil if dv.startswith("aktif") else METIN
+                        ft, an = fkalin, "w"
+                    l.configure(text=v, bg=zemin, fg=fg, font=ft, anchor=an, padx=6, pady=0)
+                    l.pack(fill="both", expand=True)
+                f.place(x=cb[0], y=cb[1], width=cb[2], height=cb[3] - 1)
+        s.rozet_gizle(hn, cn)
+
     def etiket(s, v):
         return ("d%d" % list(DURUM_RENK).index(v),) if v in DURUM_RENK else ()
 
@@ -2449,9 +2678,15 @@ class App:
                 harc += para(d["alinan_ucret"])
         s.kartlar["acik"].config(text=str(acik))
         s.kartlar["encumen"].config(text=str(encumen))
-        s.kartlar["gecik"].config(text=str(gecik), fg=KIRMIZI if gecik else METIN)
+        s.kartlar["gecik"].config(text=str(gecik))
         s.kartlar["harc"].config(text=para_yaz(harc, 0))
-        s.kartlar["parsel"].config(text=str(parsel), fg=KIRMIZI if parsel else METIN)
+        s.kartlar["parsel"].config(text=str(parsel))
+        s.kart_renk_uygula()
+
+    def kart_renk_uygula(s):
+        """Sayaç rakamlarını kendi renginde gösterir (açık/koyu temaya uyumlu)."""
+        for a, lbl in s.kartlar.items():
+            lbl.config(fg=modern_tasarim.stat_renk(KART_RENK[a], KOYU))
 
     def kart_tikla(s, a):
         s.filtre_sifirla()
