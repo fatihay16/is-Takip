@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime, date, timedelta
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import modern_tasarim
 
 import requests
 from openpyxl import Workbook, load_workbook
@@ -808,22 +809,22 @@ def takip_sonuc_yaz(takip_db_yolu, work_id, row):
 RENKLER = {"Aktif": "#e3f4e8", "Pasif": "#fde9c9", "Belirsiz": "#fff6cc", "Hata": "#fde2e2"}
 # (zemin, yazı) çiftleri: yazı rengi AÇIKÇA verilir, böylece hangi temada olursa olsun okunur
 PALET_ACIK = {
-    "satir": {"Aktif": ("#e3f4e8", "#14301f"), "Pasif": ("#fde9c9", "#4a2f05"), "Belirsiz": ("#fff6cc", "#4a4010"), "Hata": ("#fde2e2", "#4a1414")},
-    "mesaj": {"Aktif": ("#dff0d8", "#1f4d2b"), "Pasif": ("#fcf8e3", "#6b5a2a"), "Belirsiz": ("#fff6cc", "#4a4010"),
-              "Hata": ("#f2dede", "#5a1f1f"), "Bekliyor": ("#eeeeee", "#333333")},
-    "baslik": "#18334d", "alt": "#586575", "ust_bant": "#337ab7",
-    "cv_bg": "#ffffff", "cv_yazi": "#111111", "cv_cizgi": "#777777",
-    "cv_pasif": ("#d3d3d3", "#000000"), "cv_aktif": ("#7a9a3a", "#ffffff"), "cv_tahmin": ("#ececec", "#555555"),
-    "pasif_satir_fg": "#999999",
+    "satir": {"Aktif": ("#DCFCE7", "#14532D"), "Pasif": ("#FEF3C7", "#78350F"), "Belirsiz": ("#F1F5F9", "#334155"), "Hata": ("#FEE2E2", "#7F1D1D")},
+    "mesaj": {"Aktif": ("#DCFCE7", "#14532D"), "Pasif": ("#FEF3C7", "#78350F"), "Belirsiz": ("#F1F5F9", "#334155"),
+              "Hata": ("#FEE2E2", "#7F1D1D"), "Bekliyor": ("#F1F5F9", "#334155")},
+    "baslik": "#0F172A", "alt": "#64748B", "ust_bant": "#1E3A8A",
+    "cv_bg": "#FFFFFF", "cv_yazi": "#0F172A", "cv_cizgi": "#94A3B8",
+    "cv_pasif": ("#CBD5E1", "#0F172A"), "cv_aktif": ("#16A34A", "#FFFFFF"), "cv_tahmin": ("#E2E8F0", "#475569"),
+    "pasif_satir_fg": "#94A3B8",
 }
 PALET_KOYU = {
-    "satir": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"), "Hata": ("#4d2323", "#f9dcdc")},
-    "mesaj": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"),
-              "Hata": ("#4d2323", "#f9dcdc"), "Bekliyor": ("#2b3342", "#e5e7eb")},
-    "baslik": "#e5e7eb", "alt": "#9ca3af", "ust_bant": "#1e3a8a",
-    "cv_bg": "#1f2430", "cv_yazi": "#e5e7eb", "cv_cizgi": "#9ca3af",
-    "cv_pasif": ("#4b5563", "#f3f4f6"), "cv_aktif": ("#4d7c0f", "#ffffff"), "cv_tahmin": ("#2f3542", "#9ca3af"),
-    "pasif_satir_fg": "#9ca3af",
+    "satir": {"Aktif": ("#14532D", "#DCFCE7"), "Pasif": ("#452C06", "#FEF3C7"), "Belirsiz": ("#334155", "#F1F5F9"), "Hata": ("#451A1A", "#FEE2E2")},
+    "mesaj": {"Aktif": ("#14532D", "#DCFCE7"), "Pasif": ("#452C06", "#FEF3C7"), "Belirsiz": ("#334155", "#F1F5F9"),
+              "Hata": ("#451A1A", "#FEE2E2"), "Bekliyor": ("#1E293B", "#F8FAFC")},
+    "baslik": "#F8FAFC", "alt": "#94A3B8", "ust_bant": "#070D19",
+    "cv_bg": "#1E293B", "cv_yazi": "#F8FAFC", "cv_cizgi": "#64748B",
+    "cv_pasif": ("#334155", "#F8FAFC"), "cv_aktif": ("#22C55E", "#FFFFFF"), "cv_tahmin": ("#0F172A", "#94A3B8"),
+    "pasif_satir_fg": "#94A3B8",
 }
 
 
@@ -844,17 +845,25 @@ class Detay(tk.Toplevel):
     def __init__(self, master, row, ilgili=None):
         super().__init__(master)
         self.row = row
-        self.pal = getattr(master, "pal", PALET_ACIK)
+        self.koyu = koyu_mu(master)
+        self.pal = PALET_KOYU if self.koyu else PALET_ACIK
+        modern_tasarim.tema_uygula(self, self.koyu)
+        modern_tasarim.pencere_merkeze_yerlestir(self, 880, 620)
+        self.minsize(740, 500)
         self.ilgili = list(ilgili or [])  # aynı iş kaydında yazılı diğer parseller (sorgulanmamış)
         self.tahmin = self.birlesen_tahmin()
-        self.title(f"{row['ada']} ada {row['parsel']} parsel hareket listesi")
-        self.geometry("820x560")
-        tk.Label(self, text=f"{row['ada']} ada {row['parsel']} parsel hareket listesi", bg=self.pal["ust_bant"], fg="white",
-                 font=("Segoe UI", 15), anchor="w", padx=16, pady=12).pack(fill="x")
+        baslik = f"{row.get('mahalle', '')} • {row['ada']} Ada {row['parsel']} Parsel Hareket Listesi"
+        self.title(baslik)
+        modern_tasarim.ozel_baslik(
+            self,
+            f"{row.get('mahalle', '')} • {row['ada']} Ada {row['parsel']} Parsel",
+            self.koyu,
+            kurumsal_alt="TKGM Coğrafi Bilgi Servisi • Parsel Geçmişi ve Hareket Zinciri"
+        )
         nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True)
-        self.ozet_tab, self.tablo_tab, self.grafik_tab, self.ham_tab, self.devam_tab = (ttk.Frame(nb) for _ in range(5))
-        for f, ad in ((self.ozet_tab, "Özet"), (self.tablo_tab, "Hareket Tablosu"), (self.grafik_tab, "Grafik"), (self.devam_tab, "Yeni Parseller"), (self.ham_tab, "Ham veri")):
+        nb.pack(fill="both", expand=True, padx=8, pady=(6, 8))
+        self.ozet_tab, self.tablo_tab, self.grafik_tab, self.ham_tab, self.devam_tab = (ttk.Frame(nb, padding=12) for _ in range(5))
+        for f, ad in ((self.ozet_tab, "Özet"), (self.tablo_tab, "Hareket Tablosu"), (self.grafik_tab, "Grafik"), (self.devam_tab, "Yeni Parseller"), (self.ham_tab, "Ham Veri")):
             nb.add(f, text=ad)
         self.satirlar = []
         self.devamlar = []
@@ -951,7 +960,14 @@ class Detay(tk.Toplevel):
 
     def _tablo(self):
         hareketler = self.tum_hareket_satirlari()
-        t = ttk.Treeview(self.tablo_tab, columns=("aciklama", "durum", "no"), show="headings", height=10)
+        kap = ttk.Frame(self.tablo_tab)
+        kap.pack(fill="both", expand=True, padx=6, pady=6)
+        t = ttk.Treeview(kap, columns=("aciklama", "durum", "no"), show="headings", height=10)
+        sb = ttk.Scrollbar(kap, orient="vertical", command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        t.pack(side="left", fill="both", expand=True)
+
         for c, ad, w in (("aciklama", "Açıklama / İşlem", 380), ("durum", "Son Durum", 90), ("no", "Taşınmaz No", 120)):
             t.heading(c, text=ad)
             t.column(c, width=w, anchor="w")
@@ -961,9 +977,8 @@ class Detay(tk.Toplevel):
                      tags=(satir.get("durum"),))
         for no in self.tahmin:
             t.insert("", "end", values=("İş kaydında yazılı; sorgulanmadı — tevhitle birleşmiş sayıldı", "Pasif*", no), tags=("Pasif",))
-        t.pack(fill="both", expand=True, padx=12, pady=12)
         if not hareketler:
-            ttk.Label(self.tablo_tab, text="Hareket kaydı alınamadı.").pack()
+            ttk.Label(self.tablo_tab, text="Hareket kaydı alınamadı.", style="Sub.TLabel").pack(pady=12)
 
     def _grafik(self):
         self.cv = tk.Canvas(self.grafik_tab, bg=self.pal["cv_bg"], highlightthickness=0)
@@ -1083,23 +1098,35 @@ class HareketAyar(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
-        self.title("Hareket servisini ayarla")
-        self.geometry("760x470")
+        self.koyu = getattr(app, "koyu", False)
+        modern_tasarim.tema_uygula(self, self.koyu)
+        modern_tasarim.pencere_merkeze_yerlestir(self, 780, 500)
+        self.minsize(660, 420)
+        self.title("Hareket Servisi Ayarı")
+        modern_tasarim.ozel_baslik(
+            self,
+            "TKGM Hareket Servisi Ayarları",
+            self.koyu,
+            kurumsal_alt="Tapu ve Kadastro Web Servis Entegrasyon Parametreleri"
+        )
+        govde = ttk.Frame(self, padding=(18, 14))
+        govde.pack(fill="both", expand=True)
         yardim = ("Pasif parselin hareket listesini (yeni parselleri) getiren servis adresi bir kez tanımlanır.\n\n"
                   "1) Tarayıcıda parselsorgu.tkgm.gov.tr açın, F12 tuşuna basın, 'Ağ / Network' sekmesinde 'Fetch/XHR' seçin.\n"
                   "2) Pasif bir parseli sorgulayıp 'Parsel hareketlerini göster' bağlantısına tıklayın.\n"
                   "3) Listede yeni beliren isteğe tıklayın, 'Request URL' adresini kopyalayıp aşağıya yapıştırın.\n"
                   "4) Bu programda o parselin satırını seçip 'Örnek adresi şablona çevir'e basın, sonra Kaydet.\n"
                   "   (Adresteki mahalle kimliği, ada ve parsel değerleri {mahalle_id} {ada} {parsel} ile değiştirilir.)")
-        ttk.Label(self, text=yardim, justify="left", wraplength=720).pack(anchor="w", padx=16, pady=14)
+        ttk.Label(govde, text=yardim, justify="left", wraplength=720, style="Sub.TLabel").pack(anchor="w", pady=(0, 12))
         self.var = tk.StringVar(value=ayar_oku("hareket_url"))
-        ttk.Entry(self, textvariable=self.var, width=110).pack(padx=16, fill="x")
-        f = ttk.Frame(self)
-        f.pack(pady=12)
-        ttk.Button(f, text="Örnek adresi şablona çevir", command=self.cevir).pack(side="left", padx=6)
-        ttk.Button(f, text="Kaydet", command=self.kaydet).pack(side="left", padx=6)
-        ttk.Button(f, text="Temizle (servisi kapat)", command=lambda: self.var.set("")).pack(side="left", padx=6)
-        ttk.Label(self, text="Şablon örneği:  https://.../api/.../{mahalle_id}/{ada}/{parsel}", foreground="#666").pack(anchor="w", padx=16)
+        ttk.Entry(govde, textvariable=self.var, width=100).pack(fill="x", pady=4)
+        f = ttk.Frame(govde)
+        f.pack(fill="x", pady=12)
+        ttk.Button(f, text="Örnek Adresi Şablona Çevir", command=self.cevir).pack(side="left", padx=(0, 6))
+        ttk.Button(f, text="Kaydet", style="Accent.TButton", command=self.kaydet).pack(side="left", padx=6)
+        ttk.Button(f, text="Temizle (Servisi Kapat)", style="Danger.TButton", command=lambda: self.var.set("")).pack(side="left", padx=6)
+        ttk.Button(f, text="Kapat", command=self.destroy).pack(side="right")
+        ttk.Label(govde, text="Şablon örneği:  https://.../api/.../{mahalle_id}/{ada}/{parsel}", style="Sub.TLabel").pack(anchor="w", pady=(6, 0))
 
     def cevir(self):
         sec = self.app.tree.selection()
@@ -1119,19 +1146,33 @@ class MahalleEslestir(tk.Toplevel):
 
     def __init__(self, master, adlar, tkgm_adlar):
         super().__init__(master)
-        self.title("Mahalle eşleştir")
+        self.koyu = getattr(master, "koyu", False)
+        modern_tasarim.tema_uygula(self, self.koyu)
+        modern_tasarim.pencere_merkeze_yerlestir(self, 680, 520)
+        self.title("Mahalle Eşleştir")
+        modern_tasarim.ozel_baslik(
+            self,
+            "Mahalle Adı Eşleştirme Sihirbazı",
+            self.koyu,
+            kurumsal_alt="Belediye Kayıtları ve TKGM Resmi Mahalle Adı Eşleştirmesi"
+        )
         self.sonuc, self.vars = {}, {}
-        ttk.Label(self, wraplength=600, justify="left", text=(
+        govde = ttk.Frame(self, padding=(18, 14))
+        govde.pack(fill="both", expand=True)
+        ttk.Label(govde, wraplength=620, justify="left", text=(
             "İş Takip'teki şu mahalle adları TKGM listesinde birebir bulunamadı. Doğru TKGM mahallesini seçin; seçim "
-            "hatırlanır, İş Takip'teki mahalle adı DEĞİŞMEZ. Emin olmadıklarınızı '(atla)' bırakın.")).pack(padx=14, pady=12)
-        kap = ttk.Frame(self)
-        kap.pack(fill="x", padx=14)
+            "hatırlanır, İş Takip'teki mahalle adı DEĞİŞMEZ. Emin olmadıklarınızı '(atla)' bırakın."), style="Sub.TLabel").pack(anchor="w", pady=(0, 12))
+        kap = ttk.Frame(govde)
+        kap.pack(fill="both", expand=True)
         for i, ad in enumerate(adlar):
-            ttk.Label(kap, text=ad, width=28).grid(row=i, column=0, sticky="w", pady=3)
+            ttk.Label(kap, text=ad, width=28).grid(row=i, column=0, sticky="w", pady=4)
             v = tk.StringVar(value="(atla)")
-            ttk.Combobox(kap, textvariable=v, values=["(atla)"] + tkgm_adlar, width=36, state="readonly").grid(row=i, column=1, pady=3)
+            ttk.Combobox(kap, textvariable=v, values=["(atla)"] + tkgm_adlar, width=34, state="readonly").grid(row=i, column=1, pady=4, sticky="w")
             self.vars[ad] = v
-        ttk.Button(self, text="Tamam", command=self._tamam).pack(pady=12)
+        alt = ttk.Frame(self, padding=(18, 10))
+        alt.pack(fill="x", side="bottom")
+        ttk.Button(alt, text="Tamam", style="Accent.TButton", command=self._tamam).pack(side="right", padx=6)
+        ttk.Button(alt, text="İptal", command=self.destroy).pack(side="right")
         self.transient(master)
         self.grab_set()
         self.wait_window(self)
@@ -1146,19 +1187,30 @@ class App(tk.Toplevel):
         self._standalone_root = None
         if master is None:
             self._standalone_root = tk.Tk()
+            self._standalone_root.withdraw()
             master = self._standalone_root
         super().__init__(master)
+        if self._standalone_root is not None:
+            self.protocol("WM_DELETE_WINDOW", lambda: (self.destroy(), self._standalone_root.destroy()))
         self.kaynak = kaynak_normalle(kaynak)  # İş Takip'teki AÇIK işler
         self.takip_db = str(takip_db) if takip_db else ""  # sonuçların yazılacağı İş Takip veritabanı (isteğe bağlı)
         self.sonuc_geri_cagir = sonuc_geri_cagir          # f(work_id, sonuc_sozlugu): İş Takip arayüzünü yenilemek için (isteğe bağlı)
         self.acik_idler = {k["id"] for k in self.kaynak} if kaynak is not None else None
         self.baglar = {}
         self.title("Toplu Parsel Sorgulama | TKGM")
-        self.geometry("1280x780")
+        modern_tasarim.pencere_merkeze_yerlestir(self, 1280, 780)
         self.minsize(1050, 650)
         self.rows = []
         self.busy = False
         self._style()
+
+        modern_tasarim.ozel_baslik(
+            self,
+            "Toplu Parsel Sorgulama | TKGM - Tapu ve Kadastro Entegrasyonu",
+            self.koyu,
+            kurumsal_alt="T.C. Belediye Başkanlığı • Coğrafi Bilgi Sistemleri ve Harita Birimi"
+        )
+
         self._ui()
         self.load_saved()
         self.sayac_goster()
@@ -1176,9 +1228,11 @@ class App(tk.Toplevel):
             pass
         self.koyu = koyu_mu(self, st)
         self.pal = PALET_KOYU if self.koyu else PALET_ACIK
-        st.configure("Treeview", rowheight=28, font=("Segoe UI", 9))
-        st.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
-        st.configure("TButton", padding=7, font=("Segoe UI", 9))
+
+        modern_palet = modern_tasarim.tema_uygula(
+        self, self.koyu
+)
+        st.configure("Treeview", rowheight=32, font=("Segoe UI", 9))
         st.configure("Header.TLabel", font=("Segoe UI", 18, "bold"), foreground=self.pal["baslik"])
         st.configure("Sub.TLabel", font=("Segoe UI", 9), foreground=self.pal["alt"])
 
@@ -1190,20 +1244,20 @@ class App(tk.Toplevel):
                             "Satıra çift tıklayınca hareket listesi açılır.", style="Sub.TLabel").pack(anchor="w", pady=(4, 0))
         bar = ttk.Frame(self, padding=(18, 5))
         bar.pack(fill="x")
-        self.btn(bar, "Excel şablonu oluştur", self.template).pack(side="left", padx=(0, 7))
-        self.btn(bar, "Excel içe aktar", self.import_excel).pack(side="left", padx=7)
-        self.btn(bar, "İş listesinden aktar", self.is_listesinden_aktar).pack(side="left", padx=7)
-        self.btn(bar, "Sonuçları İş Takip'e yaz", self.tum_sonuclari_takibe_yaz).pack(side="left", padx=7)
-        self.btn(bar, "Seçili satırı sil", self.delete_selected).pack(side="left", padx=7)
-        self.btn(bar, "Listeyi temizle", self.clear_rows).pack(side="left", padx=7)
-        self.btn(bar, "Hareket servisini ayarla", lambda: HareketAyar(self)).pack(side="left", padx=7)
-        self.btn(bar, "Excel'e aktar", self.export_excel).pack(side="right", padx=(7, 0))
-        form = ttk.LabelFrame(self, text="Elle parsel ekle", padding=10)
+        self.btn(bar, "Excel Şablonu", self.template).pack(side="left", padx=(0, 6))
+        self.btn(bar, "Excel İçe Aktar", self.import_excel).pack(side="left", padx=6)
+        ttk.Button(bar, text="İş Listesinden Aktar", command=self.is_listesinden_aktar, style="Accent.TButton").pack(side="left", padx=6)
+        ttk.Button(bar, text="Sonuçları İş Takip'e Yaz", command=self.tum_sonuclari_takibe_yaz, style="Accent.TButton").pack(side="left", padx=6)
+        ttk.Button(bar, text="Seçili Satırı Sil", command=self.delete_selected, style="Danger.TButton").pack(side="left", padx=6)
+        self.btn(bar, "Listeyi Temizle", self.clear_rows).pack(side="left", padx=6)
+        self.btn(bar, "Hareket Servisi Ayarı", lambda: HareketAyar(self)).pack(side="left", padx=6)
+        ttk.Button(bar, text="Excel'e Aktar", command=self.export_excel, style="Accent.TButton").pack(side="right", padx=(6, 0))
+        form = ttk.LabelFrame(self, text="Elle Parsel Sorgulama", padding=12)
         form.pack(fill="x", padx=18, pady=8)
         self.vars = {}
         fields = [("İl", "il", 15), ("İlçe", "ilce", 18), ("Mahalle", "mahalle", 20), ("Ada", "ada", 10), ("Parsel", "parsel", 10)]
         for i, (label, key, width) in enumerate(fields):
-            ttk.Label(form, text=label).grid(row=0, column=i, sticky="w", padx=5)
+            ttk.Label(form, text=label, style="Muted.TLabel").grid(row=0, column=i, sticky="w", padx=5)
             v = tk.StringVar()
             self.vars[key] = v
             if key in ("il", "ilce", "mahalle"):
@@ -1219,7 +1273,7 @@ class App(tk.Toplevel):
                 ttk.Entry(form, textvariable=v, width=width).grid(row=1, column=i, sticky="ew", padx=5, pady=(3, 0))
             form.columnconfigure(i, weight=1)
         self.btn(form, "Mahalle listesini yenile", self.mahalleleri_yenile).grid(row=1, column=6, padx=6)
-        self.btn(form, "Listeye ekle", self.add_manual).grid(row=1, column=5, padx=10)
+        ttk.Button(form, text="Listeye ekle", command=self.add_manual, style="Accent.TButton").grid(row=1, column=5, padx=10)
         frame = ttk.Frame(self, padding=(18, 5))
         frame.pack(fill="both", expand=True)
         cols = ("il", "ilce", "mahalle", "ada", "parsel", "is", "durum", "alan", "nitelik", "yeni", "islem", "kontrol")
@@ -1248,10 +1302,10 @@ class App(tk.Toplevel):
         self.progress.pack(fill="x", pady=(0, 7))
         self.status = tk.StringVar(value="Hazır. Excel şablonundaki sütunlar: İl, İlçe, Mahalle, Ada, Parsel.")
         ttk.Label(bottom, textvariable=self.status).pack(side="left")
-        self.btn(bottom, "Bekleyenleri sorgula", self.start_queries).pack(side="right")
-        self.btn(bottom, "Seçili satırları sorgula", lambda: self.start_queries(secili=True)).pack(side="right", padx=7)
+        ttk.Button(bottom, text="Bekleyenleri Sorgula", command=self.start_queries, style="Accent.TButton").pack(side="right")
+        self.btn(bottom, "Seçili Satırları Sorgula", lambda: self.start_queries(secili=True)).pack(side="right", padx=7)
         self.sayac_var = tk.StringVar()
-        ttk.Label(bottom, textvariable=self.sayac_var, foreground="#18334d", font=("Segoe UI", 9, "bold")).pack(side="right", padx=14)
+        ttk.Label(bottom, textvariable=self.sayac_var, foreground=self.pal["baslik"], font=("Segoe UI", 9, "bold")).pack(side="right", padx=14)
         self.limit_var = tk.StringVar(value=str(limit_degeri()))
         sp = ttk.Spinbox(bottom, from_=10, to=100, width=5, textvariable=self.limit_var, command=self.limit_degisti)
         sp.pack(side="right")
