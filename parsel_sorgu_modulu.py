@@ -13,12 +13,10 @@ from pathlib import Path
 from datetime import datetime, date, timedelta
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import modern_tasarim
 
 import requests
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from PIL import Image, ImageDraw, ImageFont
 
 # exe olarak çalışırken veritabanı geçici klasöre değil, exe'nin yanına yazılsın
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -54,8 +52,14 @@ class ErisimHatasi(RuntimeError):
 
 
 # ------------------------------------------------------------------ veritabanı
+_SEMA_HAZIR = set()
+
+
 def db():
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=20)
+    con.execute("PRAGMA synchronous=NORMAL")
+    if str(DB_PATH) in _SEMA_HAZIR:
+        return con
     con.execute("""CREATE TABLE IF NOT EXISTS parcels (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         il TEXT, ilce TEXT, mahalle TEXT, ada TEXT, parsel TEXT,
@@ -79,6 +83,7 @@ def db():
         il TEXT, ilce TEXT, kaynak_norm TEXT, tkgm_mahalle TEXT, mahalle_id TEXT,
         PRIMARY KEY (il, ilce, kaynak_norm))""")
     con.commit()
+    _SEMA_HAZIR.add(str(DB_PATH))
     return con
 
 
@@ -124,7 +129,7 @@ def get_json(url, say=True):
         if sayac_oku() >= limit_degeri():
             raise LimitHatasi(f"Günlük üst sınıra ({limit_degeri()} istek) ulaşıldı. Yarın devam edin ya da sınırı artırın.")
         sayac_artir()
-    r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+    r = requests.get(url, headers=HEADERS, timeout=(6, TIMEOUT))  # bağlanamazsa 6 sn'de vazgeç
     if r.status_code == 403:
         raise ErisimHatasi("TKGM erişimi 403 ile reddetti (erişim/limit kısıtı). Bir süre sonra yeniden deneyin.")
     if r.status_code == 429:
@@ -204,6 +209,8 @@ def katla(s):
 
 NO_RE = re.compile(r"^\s*\d+\s*/\s*\d+\s*$")
 ISLEM_RE = re.compile(r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s+tarihli\s+(.+?)\s+islemi")
+# TKGM'nin "02/10/2026 Tarihli İfrazen Taksim (Tsm)" biçimindeki metinlerinde 'işlemi' kelimesi yoktur.
+ISLEM_RE_GENIS = re.compile(r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s+tarihli\s+(.+?)\s*(?:\([^)]*\))?\s*$")
 
 
 def metinleri_topla(obj, cikti=None):
@@ -231,6 +238,20 @@ def islem_ayikla(metin):
     """'20/10/2026 Tarihli Tevhit İşlemi (Tsm)' -> ('20.10.2026', 'Tevhit')"""
     k = katla(metin)
     m = ISLEM_RE.search(k)
+    if not m:
+        return "", ""
+    tarih = re.sub(r"[/-]", ".", metin[m.start(1):m.end(1)])
+    tur = metin[m.start(2):m.end(2)].strip()
+    return tarih, tur[:1].upper() + tur[1:]
+
+
+def islem_ayikla_genis(metin):
+    """'20/10/2026 Tarihli İfrazen Taksim (Tsm)' -> ('20.10.2026', 'İfrazen Taksim')
+    (metinde 'işlemi' kelimesi bulunmayan TKGM işlem tanımları için genişletilmiş çözümleme)."""
+    tarih, tur = islem_ayikla(metin)
+    if tarih:
+        return tarih, tur
+    m = ISLEM_RE_GENIS.search(katla(metin))
     if not m:
         return "", ""
     tarih = re.sub(r"[/-]", ".", metin[m.start(1):m.end(1)])
@@ -320,23 +341,68 @@ def props_durum(props):
     return None
 
 
-def tkgm_gittigi_parseller(props):
-    """TKGM'nin gittigiParselListe alanındaki GeoJSON hedef parsellerini çıkarır."""
-    raw = (props or {}).get("gittigiParselListe")
+def _geojson_coz(raw):
+    """TKGM iç içe GeoJSON alanını dict biçimine çevirir."""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except (TypeError, ValueError):
-            return []
-    if not isinstance(raw, dict):
-        return []
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def tkgm_gittigi_kayitlar(props, ziyaret=None, derinlik=0):
+    """İlk TKGM yanıtındaki tüm alt parselleri, ek API isteği yapmadan düz listeye açar."""
+    ziyaret = ziyaret if ziyaret is not None else set()
+    bulunan = []
+    if derinlik >= 20 or not isinstance(props, dict):
+        return bulunan
+    raw = _geojson_coz(props.get("gittigiParselListe"))
+    for feature in raw.get("features") or []:
+        if not isinstance(feature, dict):
+            continue
+        p = feature.get("properties") or {}
+        ada = str(p.get("adaNo") or "").strip()
+        parsel = str(p.get("parselNo") or "").strip()
+        if not ada or not parsel:
+            continue
+        no = f"{ada}/{parsel}"
+        if no in ziyaret:
+            continue
+        ziyaret.add(no)
+        durum = props_durum(p) or "Belirsiz"
+        sebep = str(p.get("gittigiParselSebep") or props.get("gittigiParselSebep") or "").strip()
+        alt_sonuc = analiz_et(ada, parsel, p, None) if durum == "Pasif" else None
+        bulunan.append({
+            "ada": ada, "parsel": parsel, "durum": durum,
+            "alan": area_text(p.get("alan")) or "TKGM verisinde bulunamadı",
+            "nitelik": str(p.get("nitelik") or "TKGM verisinde bulunamadı"),
+            "koordinatlar": geometri_ozeti(feature.get("geometry") or ""),
+            "geometry": feature.get("geometry") or {},
+            "islem_turu": (alt_sonuc or {}).get("islem_turu") or islem_ayikla_genis(sebep)[1],
+            "islem_tarihi": (alt_sonuc or {}).get("islem_tarihi") or islem_ayikla_genis(sebep)[0],
+            "pasif_mesaj": sebep,
+            "yeni_parseller": "; ".join(tkgm_gittigi_parseller(p)),
+            "hareketler": json.dumps(
+                [{"aciklama": sebep, "durum": durum, "no": no}] if sebep else [],
+                ensure_ascii=False
+            ),
+            "ham_hareket": ""
+        })
+        bulunan.extend(tkgm_gittigi_kayitlar(p, ziyaret, derinlik + 1))
+    return bulunan
+
+
+def tkgm_gittigi_parseller(props):
+    """İlk seviyedeki hedef parsel numaralarını döndürür."""
+    raw = _geojson_coz((props or {}).get("gittigiParselListe"))
     sonuc = []
     for feature in raw.get("features") or []:
         p = (feature or {}).get("properties") or {}
         ada = str(p.get("adaNo") or "").strip()
         parsel = str(p.get("parselNo") or "").strip()
-        if parsel:
-            no = f"{ada}/{parsel}" if ada else parsel
+        if ada and parsel:
+            no = f"{ada}/{parsel}"
             if no not in sonuc:
                 sonuc.append(no)
     return sonuc
@@ -358,12 +424,20 @@ def analiz_et(ada, parsel, props, hareket):
     # TKGM hareket bilgisi aynı parsel cevabının properties alanında geliyor.
     tkgm_durum = props_durum(props)
     sebep = str((props or {}).get("gittigiParselSebep") or "").strip()
-    hedefler = tkgm_gittigi_parseller(props)
+    hedefler = _geojson_coz((props or {}).get("gittigiParselListe")).get("features") or []
     if tkgm_durum == "Pasif":
         ibare = sebep or "Bu taşınmaz pasif durumdadır."
         satirlar.append({"aciklama": ibare, "durum": "Pasif", "no": kendi})
-        for no in hedefler:
-            satirlar.append({"aciklama": sebep, "durum": "Aktif", "no": no})
+        for feature in hedefler:
+            p = (feature or {}).get("properties") or {}
+            ada_alt = str(p.get("adaNo") or "").strip()
+            parsel_alt = str(p.get("parselNo") or "").strip()
+            if ada_alt and parsel_alt:
+                no = f"{ada_alt}/{parsel_alt}"
+                durum_alt = props_durum(p) or "Belirsiz"
+                satir = {"aciklama": sebep, "durum": durum_alt, "no": no}
+                if satir not in satirlar:
+                    satirlar.append(satir)
     for v in kaynaklar:
         for s in hareket_satirlari(v):
             if s not in satirlar:
@@ -377,7 +451,7 @@ def analiz_et(ada, parsel, props, hareket):
     tarih = tur = ""
     for metin in [ibare] + [s["aciklama"] for s in ([kendi_satir] if kendi_satir else []) + satirlar]:
         if metin and not tarih:
-            tarih, tur = islem_ayikla(metin)
+            tarih, tur = islem_ayikla_genis(metin)  # 'İfrazen Taksim (Tsm)' gibi 'işlemi' içermeyen tanımlar da çözülür
     if durum == "Pasif" and not ibare and tarih:
         ibare = f"Bu taşınmaz {tarih} Tarihli {tur} İşlemi ile pasife alınmıştır."
     yeni = []
@@ -423,65 +497,9 @@ def area_text(v):
     return "" if v is None else str(v).strip()
 
 
-def devam_parsellerini_zincirle(mahalle_id, ilk_yeni, ziyaret=None, derinlik=0):
-    """Pasif parsellerin sonraki parsellerini zincir sonuna kadar sorgular."""
-    ziyaret = ziyaret if ziyaret is not None else set()
-    bulunan, hatalar = [], []
-    if derinlik >= 20:
-        return bulunan, ["Zincir güvenlik sınırına (20 seviye) ulaştı."]
-    sablon = ayar_oku("hareket_url")
-    for no in ilk_yeni:
-        no = str(no).strip()
-        if no in ziyaret:
-            continue
-        ziyaret.add(no)
-        parca = no.split("/", 1)
-        if len(parca) != 2 or not all(x.strip().isdigit() for x in parca):
-            continue
-        ada, parsel = (x.strip() for x in parca)
-        alt_row = {"ada": ada, "parsel": parsel}
-        try:
-            yeni_data = get_json(f"{API}/parsel/{mahalle_id}/{ada}/{parsel}")
-            if not isinstance(yeni_data, dict) or yeni_data.get("type") != "Feature":
-                hatalar.append(f"{no}: TKGM kaydı alınamadı")
-                continue
-            props = yeni_data.get("properties") or {}
-            geom = yeni_data.get("geometry") or {}
-            sonuc = analiz_et(ada, parsel, props, None)
-            hareket, ham_h = None, ""
-            if sablon:
-                try:
-                    hareket = get_json(hareket_adresi(sablon, alt_row, props, mahalle_id))
-                    ham_h = json.dumps(hareket, ensure_ascii=False)
-                    if hareket_gecerli(hareket):
-                        sonuc = analiz_et(ada, parsel, props, hareket)
-                    else:
-                        hareket = None
-                except (LimitHatasi, ErisimHatasi):
-                    raise
-                except Exception as e:
-                    hatalar.append(f"{no} hareket bilgisi: {e}")
-                    hareket = None
-            durum = sonuc["durum"] or "Belirsiz"
-            bulunan.append({
-                "ada": ada, "parsel": parsel, "durum": durum,
-                "alan": area_text(props.get("alan")) or "TKGM verisinde bulunamadı",
-                "nitelik": str(props.get("nitelik") or "TKGM verisinde bulunamadı"),
-                "koordinatlar": geometri_ozeti(geom), "geometry": geom,
-                "islem_turu": sonuc["islem_turu"], "islem_tarihi": sonuc["islem_tarihi"],
-                "pasif_mesaj": sonuc["ibare"], "yeni_parseller": "; ".join(sonuc["yeni"]),
-                "hareketler": json.dumps(sonuc["satirlar"], ensure_ascii=False),
-                "ham_hareket": ham_h[:60000]
-            })
-            if durum == "Pasif" and sonuc["yeni"]:
-                altlar, alt_hatalar = devam_parsellerini_zincirle(mahalle_id, sonuc["yeni"], ziyaret, derinlik + 1)
-                bulunan.extend(altlar)
-                hatalar.extend(alt_hatalar)
-        except (LimitHatasi, ErisimHatasi):
-            raise
-        except Exception as e:
-            hatalar.append(f"{no}: {e}")
-    return bulunan, hatalar
+def devam_parsellerini_zincirle(props):
+    """Alt parsel zincirini ana TKGM yanıtının içindeki iç içe veriden çıkarır (ek istek yapmaz)."""
+    return tkgm_gittigi_kayitlar(props), []
 
 
 def query_one(row):
@@ -520,56 +538,24 @@ def query_one(row):
     ozet = {k: props.get(k) for k in ("ozet", "mevkii", "pafta", "zeminId", "zeminKmdurum") if props.get(k) not in (None, "")}
     ham = json.dumps({"properties": props, "geometri": (geom or {}).get("type") or None}, ensure_ascii=False)
     devam, devam_hatalari = [], []
-    if sonuc["durum"] == "Pasif" and sonuc["yeni"]:
-        devam, devam_hatalari = devam_parsellerini_zincirle(mahalle_id, sonuc["yeni"])
-    if sonuc["durum"] == "Pasif" and not sonuc["yeni"]:
-        ayrinti.append("Yeni parsel listesi alınamadı (hareket servisi ayarlı değil veya liste boş).")
+    if sonuc["durum"] == "Pasif" and tkgm_gittigi_parseller(props):
+        devam, devam_hatalari = devam_parsellerini_zincirle(props)
+    if sonuc["durum"] == "Pasif" and not tkgm_gittigi_parseller(props) and not sonuc["yeni"]:
+        ayrinti.append("Yeni parsel listesi alınamadı (TKGM yanıtında alt parsel listesi yok).")
     if devam_hatalari:
         ayrinti.append("Devam parselleri: " + "; ".join(devam_hatalari))
     row.update({
         "mahalle_id": str(mahalle_id), "alan": area_text(props.get("alan")) or "TKGM verisinde bulunamadı", "nitelik": str(props.get("nitelik") or "TKGM verisinde bulunamadı"),
         "koordinatlar": geometri_ozeti(geom), "geometry": geom, "status": sonuc["durum"],
         "pasif_mesaj": sonuc["ibare"], "islem_turu": sonuc["islem_turu"], "islem_tarihi": sonuc["islem_tarihi"],
-        "yeni_parseller": "; ".join(sonuc["yeni"]), "hareketler": json.dumps(sonuc["satirlar"], ensure_ascii=False),
+        "yeni_parseller": "; ".join(dict.fromkeys(
+            tkgm_gittigi_parseller(props) + sonuc["yeni"]
+        )), "hareketler": json.dumps(sonuc["satirlar"], ensure_ascii=False),
         "ham_parsel": ham[:60000], "ham_hareket": ham_h[:60000],
-        "devam_parseller": json.dumps(devam, ensure_ascii=False),
+        "devam_parseller": json.dumps([{k: v for k, v in d.items() if k != "geometry"} for d in devam], ensure_ascii=False),
         "detail": " ".join(ayrinti + ([" • ".join(f"{k}: {v}" for k, v in ozet.items())] if ozet else [])),
     })
     return row
-
-
-def make_map(row, geometry, out_path):
-    coords = (geometry or {}).get("coordinates") or []
-    if (geometry or {}).get("type") == "MultiPolygon":
-        coords = coords[0] if coords else []
-    ring = coords[0] if coords and isinstance(coords[0], list) else coords
-    if not ring or not isinstance(ring[0], (list, tuple)):
-        raise RuntimeError("Harita için parsel geometrisi bulunamadı.")
-    xs = [float(p[0]) for p in ring]
-    ys = [float(p[1]) for p in ring]
-    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
-    w, h, margin = 1200, 900, 110
-    dx, dy = max(maxx - minx, 1e-9), max(maxy - miny, 1e-9)
-    scale = min((w - 2 * margin) / dx, (h - 2 * margin) / dy)
-    ox, oy = (w - dx * scale) / 2, (h - dy * scale) / 2
-    pts = [(ox + (x - minx) * scale, h - (oy + (y - miny) * scale)) for x, y in zip(xs, ys)]
-    im = Image.new("RGB", (w, h), "#f4f6f8")
-    d = ImageDraw.Draw(im)
-    for x in range(60, w, 120):
-        d.line((x, 70, x, h - 70), fill="#e3e7eb", width=1)
-    for y in range(70, h, 120):
-        d.line((60, y, w - 60, y), fill="#e3e7eb", width=1)
-    d.polygon(pts, fill="#a8d8b9", outline="#176b3a")
-    d.line(pts + [pts[0]], fill="#176b3a", width=7)
-    try:
-        font = ImageFont.truetype("arial.ttf", 30)
-        small = ImageFont.truetype("arial.ttf", 22)
-    except Exception:
-        font = small = ImageFont.load_default()
-    d.text((60, 25), f"{row['mahalle']} | Ada {row['ada']} / Parsel {row['parsel']}", fill="#17212b", font=font)
-    d.text((60, h - 55), f"Alan: {row.get('alan', '-')} m²   •   {row.get('nitelik', '')}", fill="#17212b", font=small)
-    d.text((w - 280, h - 55), "TKGM parsel geometrisi", fill="#59636e", font=small)
-    im.save(out_path, quality=94)
 
 
 def hareket_sablonu_yap(url, row):
@@ -762,19 +748,40 @@ def son_aktif_listesi(row):
     return sorted(no for no, d in durumlar.items() if d == "Aktif" and no != kendi)
 
 
+def zincir_json(row):
+    """Parsel hareket zinciri (kök parsel + alt parseller): İş Takip tarafında ağ isteği olmadan gösterilebilsin diye saklanır."""
+    try:
+        devam = json.loads(row.get("devam_parseller") or "[]")
+    except (TypeError, ValueError):
+        devam = []
+
+    def yenilist(metin):
+        return [x.strip() for x in str(metin or "").split(";") if x.strip()]
+
+    kok = {"no": f"{row.get('ada')}/{row.get('parsel')}", "durum": row.get("status") or "", "alan": row.get("alan") or "",
+           "nitelik": row.get("nitelik") or "", "islem_turu": row.get("islem_turu") or "",
+           "islem_tarihi": row.get("islem_tarihi") or "", "aciklama": row.get("pasif_mesaj") or "",
+           "yeni": yenilist(row.get("yeni_parseller"))}
+    alt = [{"no": f"{d.get('ada')}/{d.get('parsel')}", "durum": d.get("durum") or "", "alan": d.get("alan") or "",
+            "nitelik": d.get("nitelik") or "", "islem_turu": d.get("islem_turu") or "",
+            "islem_tarihi": d.get("islem_tarihi") or "", "aciklama": d.get("pasif_mesaj") or "",
+            "yeni": yenilist(d.get("yeni_parseller"))} for d in devam if isinstance(d, dict)]
+    return json.dumps({"kok": kok, "devam": alt}, ensure_ascii=False)
+
+
 def sonuc_ozeti(row):
     return {"parsel_no": f"{row.get('ada')}/{row.get('parsel')}", "tkgm_mahalle": row.get("tkgm_mahalle") or "",
             "durum": row.get("status") or "", "alan": row.get("alan") or "", "nitelik": row.get("nitelik") or "",
             "islem_turu": row.get("islem_turu") or "", "islem_tarihi": row.get("islem_tarihi") or "",
             "yeni_parseller": row.get("yeni_parseller") or "", "nihai_aktifler": "; ".join(son_aktif_listesi(row)),
-            "aciklama": row.get("pasif_mesaj") or row.get("detail") or "",
+            "aciklama": row.get("pasif_mesaj") or row.get("detail") or "", "zincir": zincir_json(row),
             "son_kontrol": row.get("updated") or datetime.now().isoformat(timespec="seconds")}
 
 
 TAKIP_SONUC_DDL = """CREATE TABLE IF NOT EXISTS parsel_kontrol (
     work_id INTEGER PRIMARY KEY, parsel_no TEXT, tkgm_mahalle TEXT, durum TEXT, alan TEXT, nitelik TEXT,
     islem_turu TEXT, islem_tarihi TEXT, yeni_parseller TEXT, nihai_aktifler TEXT, aciklama TEXT,
-    son_kontrol TEXT, onay_bekliyor INTEGER DEFAULT 0)"""
+    son_kontrol TEXT, onay_bekliyor INTEGER DEFAULT 0, zincir TEXT)"""
 
 
 def takip_sonuc_yaz(takip_db_yolu, work_id, row):
@@ -784,6 +791,8 @@ def takip_sonuc_yaz(takip_db_yolu, work_id, row):
     con = sqlite3.connect(takip_db_yolu, timeout=15)
     try:
         con.execute(TAKIP_SONUC_DDL)
+        if "zincir" not in [r[1] for r in con.execute("PRAGMA table_info(parsel_kontrol)")]:
+            con.execute("ALTER TABLE parsel_kontrol ADD COLUMN zincir TEXT")  # eski veritabanı
         onceki = con.execute("SELECT durum, onay_bekliyor FROM parsel_kontrol WHERE work_id=?", (work_id,)).fetchone()
         if o["durum"] != "Pasif":
             onay = 0
@@ -792,15 +801,15 @@ def takip_sonuc_yaz(takip_db_yolu, work_id, row):
         else:
             onay = 1
         con.execute("""INSERT INTO parsel_kontrol (work_id, parsel_no, tkgm_mahalle, durum, alan, nitelik, islem_turu,
-            islem_tarihi, yeni_parseller, nihai_aktifler, aciklama, son_kontrol, onay_bekliyor)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            islem_tarihi, yeni_parseller, nihai_aktifler, aciklama, son_kontrol, onay_bekliyor, zincir)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(work_id) DO UPDATE SET parsel_no=excluded.parsel_no, tkgm_mahalle=excluded.tkgm_mahalle,
             durum=excluded.durum, alan=excluded.alan, nitelik=excluded.nitelik, islem_turu=excluded.islem_turu,
             islem_tarihi=excluded.islem_tarihi, yeni_parseller=excluded.yeni_parseller,
             nihai_aktifler=excluded.nihai_aktifler, aciklama=excluded.aciklama, son_kontrol=excluded.son_kontrol,
-            onay_bekliyor=excluded.onay_bekliyor""",
+            onay_bekliyor=excluded.onay_bekliyor, zincir=excluded.zincir""",
                     (work_id, o["parsel_no"], o["tkgm_mahalle"], o["durum"], o["alan"], o["nitelik"], o["islem_turu"],
-                     o["islem_tarihi"], o["yeni_parseller"], o["nihai_aktifler"], o["aciklama"], o["son_kontrol"], onay))
+                     o["islem_tarihi"], o["yeni_parseller"], o["nihai_aktifler"], o["aciklama"], o["son_kontrol"], onay, o["zincir"]))
         con.commit()
     finally:
         con.close()
@@ -809,22 +818,22 @@ def takip_sonuc_yaz(takip_db_yolu, work_id, row):
 RENKLER = {"Aktif": "#e3f4e8", "Pasif": "#fde9c9", "Belirsiz": "#fff6cc", "Hata": "#fde2e2"}
 # (zemin, yazı) çiftleri: yazı rengi AÇIKÇA verilir, böylece hangi temada olursa olsun okunur
 PALET_ACIK = {
-    "satir": {"Aktif": ("#DCFCE7", "#14532D"), "Pasif": ("#FEF3C7", "#78350F"), "Belirsiz": ("#F1F5F9", "#334155"), "Hata": ("#FEE2E2", "#7F1D1D")},
-    "mesaj": {"Aktif": ("#DCFCE7", "#14532D"), "Pasif": ("#FEF3C7", "#78350F"), "Belirsiz": ("#F1F5F9", "#334155"),
-              "Hata": ("#FEE2E2", "#7F1D1D"), "Bekliyor": ("#F1F5F9", "#334155")},
-    "baslik": "#0F172A", "alt": "#64748B", "ust_bant": "#1E3A8A",
-    "cv_bg": "#FFFFFF", "cv_yazi": "#0F172A", "cv_cizgi": "#94A3B8",
-    "cv_pasif": ("#CBD5E1", "#0F172A"), "cv_aktif": ("#16A34A", "#FFFFFF"), "cv_tahmin": ("#E2E8F0", "#475569"),
-    "pasif_satir_fg": "#94A3B8",
+    "satir": {"Aktif": ("#e3f4e8", "#14301f"), "Pasif": ("#fde9c9", "#4a2f05"), "Belirsiz": ("#fff6cc", "#4a4010"), "Hata": ("#fde2e2", "#4a1414")},
+    "mesaj": {"Aktif": ("#dff0d8", "#1f4d2b"), "Pasif": ("#fcf8e3", "#6b5a2a"), "Belirsiz": ("#fff6cc", "#4a4010"),
+              "Hata": ("#f2dede", "#5a1f1f"), "Bekliyor": ("#eeeeee", "#333333")},
+    "baslik": "#18334d", "alt": "#586575", "ust_bant": "#337ab7",
+    "cv_bg": "#ffffff", "cv_yazi": "#111111", "cv_cizgi": "#777777",
+    "cv_pasif": ("#d3d3d3", "#000000"), "cv_aktif": ("#7a9a3a", "#ffffff"), "cv_tahmin": ("#ececec", "#555555"),
+    "pasif_satir_fg": "#999999",
 }
 PALET_KOYU = {
-    "satir": {"Aktif": ("#14532D", "#DCFCE7"), "Pasif": ("#452C06", "#FEF3C7"), "Belirsiz": ("#334155", "#F1F5F9"), "Hata": ("#451A1A", "#FEE2E2")},
-    "mesaj": {"Aktif": ("#14532D", "#DCFCE7"), "Pasif": ("#452C06", "#FEF3C7"), "Belirsiz": ("#334155", "#F1F5F9"),
-              "Hata": ("#451A1A", "#FEE2E2"), "Bekliyor": ("#1E293B", "#F8FAFC")},
-    "baslik": "#F8FAFC", "alt": "#94A3B8", "ust_bant": "#070D19",
-    "cv_bg": "#1E293B", "cv_yazi": "#F8FAFC", "cv_cizgi": "#64748B",
-    "cv_pasif": ("#334155", "#F8FAFC"), "cv_aktif": ("#22C55E", "#FFFFFF"), "cv_tahmin": ("#0F172A", "#94A3B8"),
-    "pasif_satir_fg": "#94A3B8",
+    "satir": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"), "Hata": ("#4d2323", "#f9dcdc")},
+    "mesaj": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"),
+              "Hata": ("#4d2323", "#f9dcdc"), "Bekliyor": ("#2b3342", "#e5e7eb")},
+    "baslik": "#e5e7eb", "alt": "#9ca3af", "ust_bant": "#1e3a8a",
+    "cv_bg": "#1f2430", "cv_yazi": "#e5e7eb", "cv_cizgi": "#9ca3af",
+    "cv_pasif": ("#4b5563", "#f3f4f6"), "cv_aktif": ("#4d7c0f", "#ffffff"), "cv_tahmin": ("#2f3542", "#9ca3af"),
+    "pasif_satir_fg": "#9ca3af",
 }
 
 
@@ -845,25 +854,17 @@ class Detay(tk.Toplevel):
     def __init__(self, master, row, ilgili=None):
         super().__init__(master)
         self.row = row
-        self.koyu = koyu_mu(master)
-        self.pal = PALET_KOYU if self.koyu else PALET_ACIK
-        modern_tasarim.tema_uygula(self, self.koyu)
-        modern_tasarim.pencere_merkeze_yerlestir(self, 880, 620)
-        self.minsize(740, 500)
+        self.pal = getattr(master, "pal", PALET_ACIK)
         self.ilgili = list(ilgili or [])  # aynı iş kaydında yazılı diğer parseller (sorgulanmamış)
         self.tahmin = self.birlesen_tahmin()
-        baslik = f"{row.get('mahalle', '')} • {row['ada']} Ada {row['parsel']} Parsel Hareket Listesi"
-        self.title(baslik)
-        modern_tasarim.ozel_baslik(
-            self,
-            f"{row.get('mahalle', '')} • {row['ada']} Ada {row['parsel']} Parsel",
-            self.koyu,
-            kurumsal_alt="TKGM Coğrafi Bilgi Servisi • Parsel Geçmişi ve Hareket Zinciri"
-        )
+        self.title(f"{row['ada']} ada {row['parsel']} parsel hareket listesi")
+        self.geometry("900x560")
+        tk.Label(self, text=f"{row['ada']} ada {row['parsel']} parsel hareket listesi", bg=self.pal["ust_bant"], fg="white",
+                 font=("Segoe UI", 15), anchor="w", padx=16, pady=12).pack(fill="x")
         nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True, padx=8, pady=(6, 8))
-        self.ozet_tab, self.tablo_tab, self.grafik_tab, self.ham_tab, self.devam_tab = (ttk.Frame(nb, padding=12) for _ in range(5))
-        for f, ad in ((self.ozet_tab, "Özet"), (self.tablo_tab, "Hareket Tablosu"), (self.grafik_tab, "Grafik"), (self.devam_tab, "Yeni Parseller"), (self.ham_tab, "Ham Veri")):
+        nb.pack(fill="both", expand=True)
+        self.ozet_tab, self.tablo_tab, self.grafik_tab, self.ham_tab, self.devam_tab = (ttk.Frame(nb) for _ in range(5))
+        for f, ad in ((self.ozet_tab, "Özet"), (self.tablo_tab, "Hareket Tablosu"), (self.grafik_tab, "Grafik"), (self.devam_tab, "Hareket Zinciri"), (self.ham_tab, "Ham veri")):
             nb.add(f, text=ad)
         self.satirlar = []
         self.devamlar = []
@@ -960,14 +961,7 @@ class Detay(tk.Toplevel):
 
     def _tablo(self):
         hareketler = self.tum_hareket_satirlari()
-        kap = ttk.Frame(self.tablo_tab)
-        kap.pack(fill="both", expand=True, padx=6, pady=6)
-        t = ttk.Treeview(kap, columns=("aciklama", "durum", "no"), show="headings", height=10)
-        sb = ttk.Scrollbar(kap, orient="vertical", command=t.yview)
-        t.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        t.pack(side="left", fill="both", expand=True)
-
+        t = ttk.Treeview(self.tablo_tab, columns=("aciklama", "durum", "no"), show="headings", height=10)
         for c, ad, w in (("aciklama", "Açıklama / İşlem", 380), ("durum", "Son Durum", 90), ("no", "Taşınmaz No", 120)):
             t.heading(c, text=ad)
             t.column(c, width=w, anchor="w")
@@ -977,8 +971,9 @@ class Detay(tk.Toplevel):
                      tags=(satir.get("durum"),))
         for no in self.tahmin:
             t.insert("", "end", values=("İş kaydında yazılı; sorgulanmadı — tevhitle birleşmiş sayıldı", "Pasif*", no), tags=("Pasif",))
+        t.pack(fill="both", expand=True, padx=12, pady=12)
         if not hareketler:
-            ttk.Label(self.tablo_tab, text="Hareket kaydı alınamadı.", style="Sub.TLabel").pack(pady=12)
+            ttk.Label(self.tablo_tab, text="Hareket kaydı alınamadı.").pack()
 
     def _grafik(self):
         self.cv = tk.Canvas(self.grafik_tab, bg=self.pal["cv_bg"], highlightthickness=0)
@@ -1055,25 +1050,28 @@ class Detay(tk.Toplevel):
                            text="* iş kaydında yazılı, sorgulanmadı; tevhitle birleşmiş sayıldı")
 
     def _devam(self):
-        """Pasif parselden oluşan yeni parsellerin kendi TKGM alan/niteliklerini göster."""
+        """Zincirdeki alt parselleri (pasif ara + aktif son) kendi TKGM alan/nitelik ve işlem bilgileriyle gösterir."""
         try:
             devam = json.loads(self.row.get("devam_parseller") or "[]")
         except (TypeError, ValueError):
             devam = []
-        cols = ("ada", "parsel", "durum", "alan", "nitelik")
+        cols = ("ada", "parsel", "durum", "alan", "nitelik", "islem_turu", "islem_tarihi")
         tablo = ttk.Treeview(self.devam_tab, columns=cols, show="headings")
-        baslik = {"ada": "Yeni Ada", "parsel": "Yeni Parsel", "durum": "Durum",
-                  "alan": "Alan (m²)", "nitelik": "Nitelik"}
-        genislik = {"ada": 100, "parsel": 100, "durum": 100, "alan": 130, "nitelik": 300}
+        baslik = {"ada": "Ada", "parsel": "Parsel", "durum": "Durum", "alan": "Alan (m²)", "nitelik": "Nitelik",
+                  "islem_turu": "İşlem Türü", "islem_tarihi": "İşlem Tarihi"}
+        genislik = {"ada": 70, "parsel": 80, "durum": 80, "alan": 110, "nitelik": 190, "islem_turu": 140, "islem_tarihi": 100}
         for c in cols:
             tablo.heading(c, text=baslik[c])
             tablo.column(c, width=genislik[c], anchor="w")
+        tablo.tag_configure("Pasif", foreground="#8a8a8a")
         for p in devam:
             tablo.insert("", "end", values=(p.get("ada"), p.get("parsel"), p.get("durum"),
-                                            p.get("alan"), p.get("nitelik")))
+                                            p.get("alan"), p.get("nitelik"),
+                                            p.get("islem_turu") or "-", p.get("islem_tarihi") or "-"),
+                         tags=(p.get("durum"),))
         tablo.pack(fill="both", expand=True, padx=12, pady=12)
         if not devam:
-            ttk.Label(self.devam_tab, text="Yeni parsellerin ayrıntılı bilgisi bulunamadı.").pack(pady=18)
+            ttk.Label(self.devam_tab, text="Parsel hareket zinciri bilgisi bulunamadı.").pack(pady=18)
 
     def _ham(self):
         t = tk.Text(self.ham_tab, wrap="none", font=("Consolas", 9), bg=self.pal["cv_bg"], fg=self.pal["cv_yazi"],
@@ -1098,35 +1096,23 @@ class HareketAyar(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
-        self.koyu = getattr(app, "koyu", False)
-        modern_tasarim.tema_uygula(self, self.koyu)
-        modern_tasarim.pencere_merkeze_yerlestir(self, 780, 500)
-        self.minsize(660, 420)
-        self.title("Hareket Servisi Ayarı")
-        modern_tasarim.ozel_baslik(
-            self,
-            "TKGM Hareket Servisi Ayarları",
-            self.koyu,
-            kurumsal_alt="Tapu ve Kadastro Web Servis Entegrasyon Parametreleri"
-        )
-        govde = ttk.Frame(self, padding=(18, 14))
-        govde.pack(fill="both", expand=True)
+        self.title("Hareket servisini ayarla")
+        self.geometry("760x470")
         yardim = ("Pasif parselin hareket listesini (yeni parselleri) getiren servis adresi bir kez tanımlanır.\n\n"
                   "1) Tarayıcıda parselsorgu.tkgm.gov.tr açın, F12 tuşuna basın, 'Ağ / Network' sekmesinde 'Fetch/XHR' seçin.\n"
                   "2) Pasif bir parseli sorgulayıp 'Parsel hareketlerini göster' bağlantısına tıklayın.\n"
                   "3) Listede yeni beliren isteğe tıklayın, 'Request URL' adresini kopyalayıp aşağıya yapıştırın.\n"
                   "4) Bu programda o parselin satırını seçip 'Örnek adresi şablona çevir'e basın, sonra Kaydet.\n"
                   "   (Adresteki mahalle kimliği, ada ve parsel değerleri {mahalle_id} {ada} {parsel} ile değiştirilir.)")
-        ttk.Label(govde, text=yardim, justify="left", wraplength=720, style="Sub.TLabel").pack(anchor="w", pady=(0, 12))
+        ttk.Label(self, text=yardim, justify="left", wraplength=720).pack(anchor="w", padx=16, pady=14)
         self.var = tk.StringVar(value=ayar_oku("hareket_url"))
-        ttk.Entry(govde, textvariable=self.var, width=100).pack(fill="x", pady=4)
-        f = ttk.Frame(govde)
-        f.pack(fill="x", pady=12)
-        ttk.Button(f, text="Örnek Adresi Şablona Çevir", command=self.cevir).pack(side="left", padx=(0, 6))
-        ttk.Button(f, text="Kaydet", style="Accent.TButton", command=self.kaydet).pack(side="left", padx=6)
-        ttk.Button(f, text="Temizle (Servisi Kapat)", style="Danger.TButton", command=lambda: self.var.set("")).pack(side="left", padx=6)
-        ttk.Button(f, text="Kapat", command=self.destroy).pack(side="right")
-        ttk.Label(govde, text="Şablon örneği:  https://.../api/.../{mahalle_id}/{ada}/{parsel}", style="Sub.TLabel").pack(anchor="w", pady=(6, 0))
+        ttk.Entry(self, textvariable=self.var, width=110).pack(padx=16, fill="x")
+        f = ttk.Frame(self)
+        f.pack(pady=12)
+        ttk.Button(f, text="Örnek adresi şablona çevir", command=self.cevir).pack(side="left", padx=6)
+        ttk.Button(f, text="Kaydet", command=self.kaydet).pack(side="left", padx=6)
+        ttk.Button(f, text="Temizle (servisi kapat)", command=lambda: self.var.set("")).pack(side="left", padx=6)
+        ttk.Label(self, text="Şablon örneği:  https://.../api/.../{mahalle_id}/{ada}/{parsel}", foreground="#666").pack(anchor="w", padx=16)
 
     def cevir(self):
         sec = self.app.tree.selection()
@@ -1146,33 +1132,19 @@ class MahalleEslestir(tk.Toplevel):
 
     def __init__(self, master, adlar, tkgm_adlar):
         super().__init__(master)
-        self.koyu = getattr(master, "koyu", False)
-        modern_tasarim.tema_uygula(self, self.koyu)
-        modern_tasarim.pencere_merkeze_yerlestir(self, 680, 520)
-        self.title("Mahalle Eşleştir")
-        modern_tasarim.ozel_baslik(
-            self,
-            "Mahalle Adı Eşleştirme Sihirbazı",
-            self.koyu,
-            kurumsal_alt="Belediye Kayıtları ve TKGM Resmi Mahalle Adı Eşleştirmesi"
-        )
+        self.title("Mahalle eşleştir")
         self.sonuc, self.vars = {}, {}
-        govde = ttk.Frame(self, padding=(18, 14))
-        govde.pack(fill="both", expand=True)
-        ttk.Label(govde, wraplength=620, justify="left", text=(
+        ttk.Label(self, wraplength=600, justify="left", text=(
             "İş Takip'teki şu mahalle adları TKGM listesinde birebir bulunamadı. Doğru TKGM mahallesini seçin; seçim "
-            "hatırlanır, İş Takip'teki mahalle adı DEĞİŞMEZ. Emin olmadıklarınızı '(atla)' bırakın."), style="Sub.TLabel").pack(anchor="w", pady=(0, 12))
-        kap = ttk.Frame(govde)
-        kap.pack(fill="both", expand=True)
+            "hatırlanır, İş Takip'teki mahalle adı DEĞİŞMEZ. Emin olmadıklarınızı '(atla)' bırakın.")).pack(padx=14, pady=12)
+        kap = ttk.Frame(self)
+        kap.pack(fill="x", padx=14)
         for i, ad in enumerate(adlar):
-            ttk.Label(kap, text=ad, width=28).grid(row=i, column=0, sticky="w", pady=4)
+            ttk.Label(kap, text=ad, width=28).grid(row=i, column=0, sticky="w", pady=3)
             v = tk.StringVar(value="(atla)")
-            ttk.Combobox(kap, textvariable=v, values=["(atla)"] + tkgm_adlar, width=34, state="readonly").grid(row=i, column=1, pady=4, sticky="w")
+            ttk.Combobox(kap, textvariable=v, values=["(atla)"] + tkgm_adlar, width=36, state="readonly").grid(row=i, column=1, pady=3)
             self.vars[ad] = v
-        alt = ttk.Frame(self, padding=(18, 10))
-        alt.pack(fill="x", side="bottom")
-        ttk.Button(alt, text="Tamam", style="Accent.TButton", command=self._tamam).pack(side="right", padx=6)
-        ttk.Button(alt, text="İptal", command=self.destroy).pack(side="right")
+        ttk.Button(self, text="Tamam", command=self._tamam).pack(pady=12)
         self.transient(master)
         self.grab_set()
         self.wait_window(self)
@@ -1184,41 +1156,36 @@ class MahalleEslestir(tk.Toplevel):
 
 class App(tk.Toplevel):
     def __init__(self, master=None, kaynak=None, takip_db=None, sonuc_geri_cagir=None):
+        t0 = time.perf_counter()
         self._standalone_root = None
         if master is None:
             self._standalone_root = tk.Tk()
-            self._standalone_root.withdraw()
             master = self._standalone_root
         super().__init__(master)
-        if self._standalone_root is not None:
-            self.protocol("WM_DELETE_WINDOW", lambda: (self.destroy(), self._standalone_root.destroy()))
         self.kaynak = kaynak_normalle(kaynak)  # İş Takip'teki AÇIK işler
         self.takip_db = str(takip_db) if takip_db else ""  # sonuçların yazılacağı İş Takip veritabanı (isteğe bağlı)
         self.sonuc_geri_cagir = sonuc_geri_cagir          # f(work_id, sonuc_sozlugu): İş Takip arayüzünü yenilemek için (isteğe bağlı)
         self.acik_idler = {k["id"] for k in self.kaynak} if kaynak is not None else None
         self.baglar = {}
         self.title("Toplu Parsel Sorgulama | TKGM")
-        modern_tasarim.pencere_merkeze_yerlestir(self, 1280, 780)
+        self.geometry("1280x780")
         self.minsize(1050, 650)
         self.rows = []
         self.busy = False
+        self.kapalilari_goster = tk.BooleanVar(value=False)
+        self._aktarim_suruyor = False
+        self.gizli_sayi = 0
         self._style()
-
-        modern_tasarim.ozel_baslik(
-            self,
-            "Toplu Parsel Sorgulama | TKGM - Tapu ve Kadastro Entegrasyonu",
-            self.koyu,
-            kurumsal_alt="T.C. Belediye Başkanlığı • Coğrafi Bilgi Sistemleri ve Harita Birimi"
-        )
-
         self._ui()
         self.load_saved()
         self.sayac_goster()
         for alan, var in self.vars.items():
             var.trace_add("write", lambda *_args, k=alan, v=var: ayar_yaz("secim_" + k, v.get()))
-        self.after(150, self.illeri_yukle)
-        if self.kaynak:  # pencere açılınca açık işleri kendiliğinden parsel listesine işle
-            self.after(700, lambda: self.is_listesinden_aktar(sessiz=True))
+        self.after(50, self.illeri_yukle)
+        if self.kaynak:  # açık işler ARKA PLANDA parsel listesine işlenir; pencere beklemeden açılır
+            self.after(100, lambda: self.is_listesinden_aktar(sessiz=True))
+        self.status.set(f"Pencere {time.perf_counter() - t0:.1f} sn'de açıldı."
+                        + (" Açık işler arka planda aktarılıyor..." if self.kaynak else ""))
 
     def _style(self):
         st = ttk.Style(self)
@@ -1228,11 +1195,9 @@ class App(tk.Toplevel):
             pass
         self.koyu = koyu_mu(self, st)
         self.pal = PALET_KOYU if self.koyu else PALET_ACIK
-
-        modern_palet = modern_tasarim.tema_uygula(
-        self, self.koyu
-)
-        st.configure("Treeview", rowheight=32, font=("Segoe UI", 9))
+        st.configure("Treeview", rowheight=28, font=("Segoe UI", 9))
+        st.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        st.configure("TButton", padding=7, font=("Segoe UI", 9))
         st.configure("Header.TLabel", font=("Segoe UI", 18, "bold"), foreground=self.pal["baslik"])
         st.configure("Sub.TLabel", font=("Segoe UI", 9), foreground=self.pal["alt"])
 
@@ -1244,20 +1209,22 @@ class App(tk.Toplevel):
                             "Satıra çift tıklayınca hareket listesi açılır.", style="Sub.TLabel").pack(anchor="w", pady=(4, 0))
         bar = ttk.Frame(self, padding=(18, 5))
         bar.pack(fill="x")
-        self.btn(bar, "Excel Şablonu", self.template).pack(side="left", padx=(0, 6))
-        self.btn(bar, "Excel İçe Aktar", self.import_excel).pack(side="left", padx=6)
-        ttk.Button(bar, text="İş Listesinden Aktar", command=self.is_listesinden_aktar, style="Accent.TButton").pack(side="left", padx=6)
-        ttk.Button(bar, text="Sonuçları İş Takip'e Yaz", command=self.tum_sonuclari_takibe_yaz, style="Accent.TButton").pack(side="left", padx=6)
-        ttk.Button(bar, text="Seçili Satırı Sil", command=self.delete_selected, style="Danger.TButton").pack(side="left", padx=6)
-        self.btn(bar, "Listeyi Temizle", self.clear_rows).pack(side="left", padx=6)
-        self.btn(bar, "Hareket Servisi Ayarı", lambda: HareketAyar(self)).pack(side="left", padx=6)
-        ttk.Button(bar, text="Excel'e Aktar", command=self.export_excel, style="Accent.TButton").pack(side="right", padx=(6, 0))
-        form = ttk.LabelFrame(self, text="Elle Parsel Sorgulama", padding=12)
+        self.btn(bar, "Excel şablonu oluştur", self.template).pack(side="left", padx=(0, 7))
+        self.btn(bar, "Excel içe aktar", self.import_excel).pack(side="left", padx=7)
+        self.btn(bar, "İş listesinden aktar", self.is_listesinden_aktar).pack(side="left", padx=7)
+        self.btn(bar, "Sonuçları İş Takip'e yaz", self.tum_sonuclari_takibe_yaz).pack(side="left", padx=7)
+        ttk.Checkbutton(bar, text="Kapanan işlerin parsellerini de göster", variable=self.kapalilari_goster,
+                        command=self.refresh).pack(side="left", padx=10)
+        self.btn(bar, "Seçili satırı sil", self.delete_selected).pack(side="left", padx=7)
+        self.btn(bar, "Listeyi temizle", self.clear_rows).pack(side="left", padx=7)
+        self.btn(bar, "Hareket servisini ayarla", lambda: HareketAyar(self)).pack(side="left", padx=7)
+        self.btn(bar, "Excel'e aktar", self.export_excel).pack(side="right", padx=(7, 0))
+        form = ttk.LabelFrame(self, text="Elle parsel ekle", padding=10)
         form.pack(fill="x", padx=18, pady=8)
         self.vars = {}
         fields = [("İl", "il", 15), ("İlçe", "ilce", 18), ("Mahalle", "mahalle", 20), ("Ada", "ada", 10), ("Parsel", "parsel", 10)]
         for i, (label, key, width) in enumerate(fields):
-            ttk.Label(form, text=label, style="Muted.TLabel").grid(row=0, column=i, sticky="w", padx=5)
+            ttk.Label(form, text=label).grid(row=0, column=i, sticky="w", padx=5)
             v = tk.StringVar()
             self.vars[key] = v
             if key in ("il", "ilce", "mahalle"):
@@ -1273,7 +1240,7 @@ class App(tk.Toplevel):
                 ttk.Entry(form, textvariable=v, width=width).grid(row=1, column=i, sticky="ew", padx=5, pady=(3, 0))
             form.columnconfigure(i, weight=1)
         self.btn(form, "Mahalle listesini yenile", self.mahalleleri_yenile).grid(row=1, column=6, padx=6)
-        ttk.Button(form, text="Listeye ekle", command=self.add_manual, style="Accent.TButton").grid(row=1, column=5, padx=10)
+        self.btn(form, "Listeye ekle", self.add_manual).grid(row=1, column=5, padx=10)
         frame = ttk.Frame(self, padding=(18, 5))
         frame.pack(fill="both", expand=True)
         cols = ("il", "ilce", "mahalle", "ada", "parsel", "is", "durum", "alan", "nitelik", "yeni", "islem", "kontrol")
@@ -1302,10 +1269,10 @@ class App(tk.Toplevel):
         self.progress.pack(fill="x", pady=(0, 7))
         self.status = tk.StringVar(value="Hazır. Excel şablonundaki sütunlar: İl, İlçe, Mahalle, Ada, Parsel.")
         ttk.Label(bottom, textvariable=self.status).pack(side="left")
-        ttk.Button(bottom, text="Bekleyenleri Sorgula", command=self.start_queries, style="Accent.TButton").pack(side="right")
-        self.btn(bottom, "Seçili Satırları Sorgula", lambda: self.start_queries(secili=True)).pack(side="right", padx=7)
+        self.btn(bottom, "Bekleyenleri sorgula", self.start_queries).pack(side="right")
+        self.btn(bottom, "Seçili satırları sorgula", lambda: self.start_queries(secili=True)).pack(side="right", padx=7)
         self.sayac_var = tk.StringVar()
-        ttk.Label(bottom, textvariable=self.sayac_var, foreground=self.pal["baslik"], font=("Segoe UI", 9, "bold")).pack(side="right", padx=14)
+        ttk.Label(bottom, textvariable=self.sayac_var, foreground="#18334d", font=("Segoe UI", 9, "bold")).pack(side="right", padx=14)
         self.limit_var = tk.StringVar(value=str(limit_degeri()))
         sp = ttk.Spinbox(bottom, from_=10, to=100, width=5, textvariable=self.limit_var, command=self.limit_degisti)
         sp.pack(side="right")
@@ -1402,6 +1369,27 @@ class App(tk.Toplevel):
         combo.focus_set()
 
     def illeri_yukle(self):
+        """İl/ilçe/mahalle listelerini ARKA PLANDA önbelleğe alır (ağ yavaşsa pencere donmaz), sonra arayüzü doldurur."""
+        def isci():
+            hata = ""
+            try:
+                iller = get_json_onbellekli(API + "/idariYapi/ilListe")
+                il, ilce = ayar_oku("secim_il"), ayar_oku("secim_ilce")
+                if il:
+                    il_id = find_id(feature_items(iller), ["text", "ad", "name", "ilAdi"], il)
+                    ilceler = get_json_onbellekli(f"{API}/idariYapi/ilceListe/{il_id}")
+                    if ilce:
+                        ilce_id = find_id(feature_items(ilceler), ["text", "ilceAdi", "ad", "name"], ilce)
+                        get_json_onbellekli(f"{API}/idariYapi/mahalleListe/{ilce_id}")
+            except Exception as e:
+                hata = str(e)
+            self.after(0, self._illeri_yukle_ui, hata)
+        threading.Thread(target=isci, daemon=True).start()
+
+    def _illeri_yukle_ui(self, hata=""):
+        if hata:  # ağda sorun varsa arayüz iş parçacığında tekrar ağ isteği ATILMAZ
+            self.status.set("Konum listeleri alınamadı (TKGM yanıt vermiyor olabilir): " + hata[:110])
+            return
         try:
             iller = self.idari_liste("il")
             self.il_tam_liste = self.liste_adlari(iller)
@@ -1466,58 +1454,90 @@ class App(tk.Toplevel):
         self.sayac_var.set(f"Bugün: {sayac_oku()} / {limit_degeri()} istek")
 
     # ---- liste işlemleri
-    def is_listesinden_aktar(self, sessiz=False):
+    def is_listesinden_aktar(self, sessiz=False, bekle=False):
         """İş Takip'teki AÇIK işleri parsel listesine aktarır ve her satırı iş kayıt numarasıyla ilişkilendirir.
-        Mahalle adı İş Takip'teki gibi korunur; TKGM mahalle kimliği yalnızca birebir (normalize) eşleşmeyle atanır.
-        Eşleşmeyen mahalleler bir kez seçtirilir ve hatırlanır."""
+        Ağ ve hazırlık işi arka planda yapılır (pencere donmaz); veritabanına tek işlemde yazılır. bekle=True: aynı iş parçacığında çalıştırır."""
         if not self.kaynak:
             if not sessiz:
                 messagebox.showinfo("İş listesinden aktar", "Aktarılacak açık iş kaydı bulunamadı.", parent=self)
             return
+        if getattr(self, "_aktarim_suruyor", False):
+            return
+        self._aktarim_suruyor = True
         il = self.vars["il"].get().strip() or ayar_oku("secim_il") or VARSAYILAN_IL
         ilce = self.vars["ilce"].get().strip() or ayar_oku("secim_ilce") or VARSAYILAN_ILCE
-        try:
-            mahalleler = mahalle_listesi_getir(il, ilce)
-        except Exception as e:
-            self.status.set("İş aktarımı yapılamadı: TKGM mahalle listesi alınamadı - " + str(e))
+        self.status.set("Açık işler parsel listesine aktarılıyor...")
+        kaynak = list(self.kaynak)
+
+        def isci():
+            hata, sonuc, mahalleler = "", None, []
+            try:
+                mahalleler = mahalle_listesi_getir(il, ilce)
+                sonuc = aktarim_hazirla(kaynak, il, ilce, mahalleler, esleme_hafizasi(il, ilce))
+            except Exception as e:
+                hata = str(e)
+            self.after(0, self._aktarim_tamam, sonuc, il, ilce, mahalleler, hata, sessiz)
+
+        if bekle:
+            isci()
+        else:
+            threading.Thread(target=isci, daemon=True).start()
+
+    def _aktarim_tamam(self, sonuc, il, ilce, mahalleler, hata, sessiz):
+        """(Arayüz iş parçacığı) hazırlanan aktarımı uygular."""
+        self._aktarim_suruyor = False
+        if hata:
+            self.status.set("İş aktarımı yapılamadı: TKGM mahalle listesi alınamadı - " + hata[:120])
             if not sessiz:
-                messagebox.showerror("TKGM listesi alınamadı", str(e), parent=self)
+                messagebox.showerror("TKGM listesi alınamadı", hata, parent=self)
             return
-        hafiza = esleme_hafizasi(il, ilce)
-        sonuc = aktarim_hazirla(self.kaynak, il, ilce, mahalleler, hafiza)
         if sonuc["eslesmeyen"] and not sessiz:
             secilen = self.mahalle_eslestir_sor(sorted(sonuc["eslesmeyen"]), mahalleler)
             if secilen:
                 for ad, (tkgm_ad, mid) in secilen.items():
                     esleme_kaydet(il, ilce, ad, tkgm_ad, mid)
                 sonuc = aktarim_hazirla(self.kaynak, il, ilce, mahalleler, esleme_hafizasi(il, ilce))
-        yeni = 0
+        mevcut = {norm_anahtar(r): r for r in self.rows}  # tek geçişte dizinlenir (eskiden her iş için tüm liste taranıyordu)
+        yeni_satirlar, guncellenen, baglar = [], [], []
         for s in sonuc["satirlar"]:
             satir = {k: s[k] for k in ("il", "ilce", "mahalle", "tkgm_mahalle", "mahalle_id", "ada", "parsel")}
             satir.update({"status": "Bekliyor", "detail": f"İş Takip kaydı #{s['work_id']} üzerinden aktarıldı."})
-            mevcut = next((x for x in self.rows if norm_anahtar(x) == norm_anahtar(satir)), None)
-            if mevcut is None:
-                self.add_row(satir)
-                yeni += 1
+            hedef = mevcut.get(norm_anahtar(satir))
+            if hedef is None:
+                self.rows.append(satir)
+                mevcut[norm_anahtar(satir)] = satir
+                yeni_satirlar.append(satir)
                 hedef = satir
-            else:  # aynı parsel zaten listede (yazım farkıyla): yeni satır açma, eksik kimlikleri tamamla
-                hedef = mevcut
-                if not mevcut.get("mahalle_id") or not mevcut.get("tkgm_mahalle"):
-                    mevcut["mahalle_id"] = mevcut.get("mahalle_id") or satir["mahalle_id"]
-                    mevcut["tkgm_mahalle"] = mevcut.get("tkgm_mahalle") or satir["tkgm_mahalle"]
-                    con = db()
+            elif not hedef.get("mahalle_id") or not hedef.get("tkgm_mahalle"):
+                hedef["mahalle_id"] = hedef.get("mahalle_id") or satir["mahalle_id"]
+                hedef["tkgm_mahalle"] = hedef.get("tkgm_mahalle") or satir["tkgm_mahalle"]
+                guncellenen.append(hedef)
+            baglar.append((s["work_id"], satir_anahtari(hedef), s["kaynak_metin"]))
+        zaman = datetime.now().isoformat(timespec="seconds")
+        yer = ",".join("?" * len(SUTUNLAR))
+        guncelle_sql = ",".join(f"{k}=excluded.{k}" for k in SUTUNLAR[5:])
+        con = db()
+        try:
+            with con:  # TEK işlem: yüzlerce ayrı kayıt/fsync yerine bir kez
+                for r in yeni_satirlar:
+                    r["updated"] = zaman
+                    con.execute(f"INSERT INTO parcels({','.join(SUTUNLAR)}) VALUES({yer}) ON CONFLICT(il,ilce,mahalle,ada,parsel) "
+                                f"DO UPDATE SET {guncelle_sql}", [r.get(k) for k in SUTUNLAR])
+                for r in guncellenen:
                     con.execute("UPDATE parcels SET mahalle_id=?, tkgm_mahalle=? WHERE il=? AND ilce=? AND mahalle=? AND ada=? AND parsel=?",
-                                (mevcut["mahalle_id"], mevcut["tkgm_mahalle"], *satir_anahtari(mevcut)))
-                    con.commit()
-                    con.close()
-            baglanti_kaydet(s["work_id"], satir_anahtari(hedef), s["kaynak_metin"])
+                                (r["mahalle_id"], r["tkgm_mahalle"], *satir_anahtari(r)))
+                for wid, anahtar, metin in baglar:
+                    con.execute("DELETE FROM is_parsel_bag WHERE work_id=? AND NOT (il=? AND ilce=? AND mahalle=? AND ada=? AND parsel=?)",
+                                (wid, *anahtar))
+                    con.execute("INSERT OR REPLACE INTO is_parsel_bag VALUES (?,?,?,?,?,?,?,?)", (wid, *anahtar, metin, zaman))
+        finally:
+            con.close()
         self.baglar = baglantilari_oku()
         self.refresh()
-        kapali = sum(1 for r in self.rows if self.baglar.get(satir_anahtari(r)) and self.acik_idler is not None
-                     and not any(i in self.acik_idler for i in self.baglar[satir_anahtari(r)]))
-        mesaj = [f"İş Takip'teki açık iş: {len(self.kaynak)}", f"İş numarasıyla bağlanan: {len(sonuc['satirlar'])} (yeni parsel satırı: {yeni})"]
-        if kapali:
-            mesaj.append(f"Bağlı işi kapanmış parsel: {kapali} (otomatik sorgulanmaz, limit harcanmaz)")
+        mesaj = [f"İş Takip'teki açık iş: {len(self.kaynak)}",
+                 f"İş numarasıyla bağlanan: {len(sonuc['satirlar'])} (yeni parsel satırı: {len(yeni_satirlar)})"]
+        if self.gizli_sayi:
+            mesaj.append(f"Bağlı işi kapanmış parsel: {self.gizli_sayi} (listede gizli, sorgulanmaz, limit harcanmaz)")
         if sonuc["coklu"]:
             mesaj.append("Birden fazla parsel yazılı olduğu için yalnızca İLK parsel sorgulanacak: " + ", ".join(sonuc["coklu"][:12])
                          + (" ..." if len(sonuc["coklu"]) > 12 else ""))
@@ -1526,7 +1546,8 @@ class App(tk.Toplevel):
                 f"{ad} ({', '.join('#' + str(i) for i in ids[:5])})" for ad, ids in sorted(sonuc["eslesmeyen"].items())))
         if sonuc["hatali"]:
             mesaj.append("Okunamayan kayıtlar: " + "; ".join(sonuc["hatali"][:10]))
-        self.status.set("İş listesinden aktarım: " + " | ".join(mesaj[:2]) + (" | Eşleşmeyen mahalle var: 'İş listesinden aktar' ile eşleştirin." if sonuc["eslesmeyen"] and sessiz else ""))
+        self.status.set("İş listesinden aktarım: " + " | ".join(mesaj[:2]) + (
+            " | Eşleşmeyen mahalle var: 'İş listesinden aktar' ile eşleştirin." if sonuc["eslesmeyen"] and sessiz else ""))
         if not sessiz:
             messagebox.showinfo("İş listesinden aktarım", "\n\n".join(mesaj), parent=self)
 
@@ -1582,16 +1603,30 @@ class App(tk.Toplevel):
         self.refresh()
         self.save_row(row)
 
+    def kapali_mi(self, r):
+        """Bağlı TÜM işleri kapanmış (tescillendi/askıda/iptal) parsel: sorgu listesinde gerek yok."""
+        ids = self.baglar.get(satir_anahtari(r))
+        return bool(ids) and self.acik_idler is not None and not any(i in self.acik_idler for i in ids)
+
+    def gorunen_satirlar(self):
+        return [r for r in self.rows if self.kapalilari_goster.get() or not self.kapali_mi(r)]
+
     def refresh(self):
-        for x in self.tree.get_children():
-            self.tree.delete(x)
+        self.tree.delete(*self.tree.get_children())
+        goster = self.kapalilari_goster.get()
+        gizli = 0
         for i, r in enumerate(self.rows):
+            if not goster and self.kapali_mi(r):
+                gizli += 1
+                continue
             st = r.get("status") or "Bekliyor"
             islem = f"{r.get('islem_turu') or ''} {r.get('islem_tarihi') or ''}".strip()
             kontrol = (r.get("updated") or "")[:16].replace("T", " ")
             self.tree.insert("", "end", iid=str(i), tags=(st,), values=(
-                r.get("il", ""), r.get("ilce", ""), r.get("mahalle", ""), r.get("ada", ""), r.get("parsel", ""), ", ".join(f"#{i}" for i in self.baglar.get(satir_anahtari(r), [])), st,
+                r.get("il", ""), r.get("ilce", ""), r.get("mahalle", ""), r.get("ada", ""), r.get("parsel", ""),
+                ", ".join(f"#{k}" for k in self.baglar.get(satir_anahtari(r), [])), st,
                 r.get("alan", "") or "", r.get("nitelik", "") or "", (r.get("yeni_parseller") or "").replace("; ", ", "), islem, kontrol))
+        self.gizli_sayi = gizli
 
     def ilgili_parseller(self, row):
         """Bu parsele bağlı iş kayıtlarında yazılı TÜM parseller (sorgulanan hariç): '727/2-3' -> ['727/3']."""
@@ -1750,32 +1785,8 @@ class App(tk.Toplevel):
             try:
                 self.after(0, self.status.set, f"Sorgulanıyor: {row['mahalle']} {row['ada']}/{row['parsel']}")
                 query_one(row)
-                geom = row.pop("geometry", None)
-                try:
-                    devamlar = json.loads(row.get("devam_parseller") or "[]")
-                except (TypeError, ValueError):
-                    devamlar = []
-                for alt in devamlar:
-                    alt_geom = alt.pop("geometry", None)
-                    if alt_geom:
-                        try:
-                            DATA_DIR.mkdir(exist_ok=True)
-                            safe_alt = "_".join(str(row[k]).replace("/", "-").replace(" ", "_") for k in ("il", "ilce", "mahalle")) + f"_Ada_{alt['ada']}_Parsel_{alt['parsel']}"
-                            alt_path = DATA_DIR / (safe_alt + ".png")
-                            alt_row = dict(row, ada=alt.get("ada"), parsel=alt.get("parsel"), alan=alt.get("alan"), nitelik=alt.get("nitelik"))
-                            make_map(alt_row, alt_geom, alt_path)
-                            alt["map_file"] = str(alt_path)
-                        except Exception:
-                            alt["map_file"] = ""
-                row["devam_parseller"] = json.dumps(devamlar, ensure_ascii=False)
-                if row["status"] == "Aktif" and geom:
-                    try:
-                        DATA_DIR.mkdir(exist_ok=True)
-                        safe = "_".join(str(row[k]).replace("/", "-").replace(" ", "_") for k in ("il", "ilce", "mahalle", "ada", "parsel"))
-                        make_map(row, geom, DATA_DIR / (safe + ".png"))
-                        row["map_file"] = str(DATA_DIR / (safe + ".png"))
-                    except Exception:
-                        pass  # harita üretilememesi sorgu sonucunu bozmaz
+                row.pop("geometry", None)
+                # Harita PNG dosyası üretilmez veya diske kaydedilmez.
                 sayim[row["status"]] = sayim.get(row["status"], 0) + 1
             except (LimitHatasi, ErisimHatasi) as e:
                 durdu = str(e)
@@ -1810,23 +1821,23 @@ class App(tk.Toplevel):
         ws = wb.active
         ws.title = "Sorgu Sonuçları"
         ws.append(["İl", "İlçe", "Mahalle", "Ada", "Parsel", "Parsel durumu", "Alan (m²)", "Nitelik", "Pasif ibaresi", "İşlem türü",
-                   "İşlem tarihi", "Yeni parseller", "Son kontrol", "Açıklama", "Koordinatlar (Enlem, Boylam)", "Harita Görseli"])
-        for r in self.rows:
+                   "İşlem tarihi", "Yeni parseller", "Son kontrol", "Açıklama", "Koordinatlar (Enlem, Boylam)"])
+        for r in self.gorunen_satirlar():
             ws.append([r.get("il"), r.get("ilce"), r.get("mahalle"), r.get("ada"), r.get("parsel"), r.get("status"), r.get("alan"),
                        r.get("nitelik"), r.get("pasif_mesaj"), r.get("islem_turu"), r.get("islem_tarihi"),
                        (r.get("yeni_parseller") or "").replace("; ", ", "), (r.get("updated") or "").replace("T", " "),
-                       r.get("detail"), r.get("koordinatlar"), r.get("map_file")])
+                       r.get("detail"), r.get("koordinatlar")])
         for c in ws[1]:
             c.font = Font(bold=True, color="FFFFFF")
             c.fill = PatternFill("solid", fgColor="244766")
             c.alignment = Alignment(wrap_text=True)
-        for i, w in enumerate([14, 20, 20, 10, 10, 14, 12, 16, 50, 12, 13, 24, 17, 50, 40, 40], 1):
+        for i, w in enumerate([14, 20, 20, 10, 10, 14, 12, 16, 50, 12, 13, 24, 17, 50, 40], 1):
             ws.column_dimensions[chr(64 + i)].width = w
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
-        devam_ws = wb.create_sheet("Aktif Devam Parselleri")
-        devam_ws.append(["Kaynak İl", "Kaynak İlçe", "Kaynak Mahalle", "Eski Ada", "Eski Parsel", "İşlem Türü", "İşlem Tarihi", "Yeni Ada", "Yeni Parsel", "Durum", "Alan (m²)", "Nitelik", "Koordinatlar (Enlem, Boylam)"])
-        for kaynak in self.rows:
+        devam_ws = wb.create_sheet("Parsel Hareket Zinciri")
+        devam_ws.append(["Kaynak İl", "Kaynak İlçe", "Kaynak Mahalle", "Başlangıç Ada", "Başlangıç Parsel", "İşlem Türü", "İşlem Tarihi", "Alt Ada", "Alt Parsel", "Durum", "Alan (m²)", "Nitelik", "Koordinatlar (Enlem, Boylam)"])
+        for kaynak in self.gorunen_satirlar():
             try:
                 altlar = json.loads(kaynak.get("devam_parseller") or "[]")
             except (TypeError, ValueError):
@@ -1844,7 +1855,7 @@ class App(tk.Toplevel):
         devam_ws.freeze_panes = "A2"
         devam_ws.auto_filter.ref = devam_ws.dimensions
         wb.save(path)
-        messagebox.showinfo("Tamamlandı", "Excel sonuç dosyası oluşturuldu. Aktif devam parselleri ayrı sayfaya eklendi.")
+        messagebox.showinfo("Tamamlandı", "Excel sonuç dosyası oluşturuldu. Parsel hareket zinciri (pasif ara ve aktif son parseller) ayrı sayfaya eklendi.")
 
 
 if __name__ == "__main__":
