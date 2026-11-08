@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Geçici köprü: TKGM Parsel Sorgu penceresini (parsel_sorgu_modulu.py, hâlâ Tkinter) AYRI bir süreçte açar.
+Geçici köprü: PySide6 tabanlı TKGM Parsel Sorgu penceresini AYRI bir süreçte açar.
 
 Neden gerekli?
-  Encümen penceresi PySide6'ya geçti. Tkinter penceresi ile Qt penceresi aynı süreçte birlikte çalışamaz.
-  Bu dosya, parsel_sorgu_modulu.App'i eskisiyle AYNI parametrelerle (kaynak, takip_db) çağırır;
-  parsel_sorgu_modulu.py'ye hiç dokunulmaz.
+  Encümen ve TKGM pencereleri ayrı süreçlerde çalıştırılır.
+  Bu dosya, parsel_sorgu_modulu.App'i (kaynak, takip_db) parametreleriyle çağırır.
+  TKGM modülü PySide6 kullanır; Tkinter yalnızca köprü sürecini sonlandırmak için görünmez kök döngüsünü sağlar.
 
 Sonuçlar nasıl Encümen'e ulaşır?
   parsel_sorgu_modulu, sonuçları zaten imar_kayitlari.db içindeki 'parsel_kontrol' tablosuna yazıyor.
@@ -36,8 +36,8 @@ def calistir(args):
     import tkinter as tk
     import parsel_sorgu_modulu
 
-    # Eski programda pencere, Encümen'in Tk kök penceresine bağlı açılıyordu. Aynı çağrı biçimini korumak için
-    # görünmez (şeffaf, 1x1 piksel) bir kök pencere kullanılır.
+    # Encümen'den ayrı süreçte çalışırken Tkinter yalnızca köprü döngüsü olarak kullanılır.
+    # Qt olayları parsel_sorgu_modulu içindeki _tk_koprusu tarafından bu döngüde işlenir.
     kok = tk.Tk()
     kok.overrideredirect(True)
     kok.geometry("1x1+0+0")
@@ -51,11 +51,9 @@ def calistir(args):
         sonuc_geri_cagir=lambda work_id, ozet: None,  # sonuç zaten veritabanına yazılıyor; Encümen tabloyu izliyor
     )
 
-    def kapaninca(olay):
-        if olay.widget is pencere:
-            kok.after(100, kok.quit)
-
-    pencere.bind("<Destroy>", kapaninca)
+    # pencere bir PySide6 QMainWindow'dur; Tkinter bind() kullanılamaz.
+    # Qt penceresi kapatılıp yok edildiğinde köprü döngüsünü güvenle sonlandır.
+    pencere.destroyed.connect(lambda *_: kok.after(100, kok.quit))
     kok.mainloop()
     try:
         kok.destroy()
