@@ -1,29 +1,26 @@
 PARSEL SORGU - IS TAKIP ENTEGRASYONU (GUNCEL)
 =============================================
-Dosyalar (hepsi ayni klasorde): encumen_kayit.py, parsel_sorgu_modulu.py, requirements.txt (pip install -r requirements.txt)
+GITHUB'DAN ALINACAK DOSYALAR
+  encumen_kayit.py        (Is Takip)
+  parsel_sorgu_modulu.py  (Parsel Sorgu)
+  requirements.txt        (Pillow cikarildi: requests, openpyxl)
+Degismeyenler: exe_yap.bat, kisayol_olustur.bat, encumen.ico.   Kurulum: pip install -r requirements.txt
+Ilk acilistan once Yedek > Simdi yedekle. Veritabani yeni sutunlari kendiliginden ekler (kayit kaybi olmaz).
 
-Is Takip'te:
-  - "Parsel Sorgu" dugmesi (tarih araligi satirinin sagi) veya Veri > Parsel Sorgu (TKGM)...
-    Acik isler (Tescillendi/Askida/Iptal haric, mahalle ve ada/parsel dolu olanlar) parsel penceresine aktarilir.
-  - Sonuclar imar_kayitlari.db icindeki parsel_kontrol tablosuna yazilir; kayit tablosuna DOKUNULMAZ.
-  - Tabloda iki yeni sutun: "Parsel durumu" ve "Yeni parseller". Pasif ve onay bekleyen kayit kirmizi, "⚠ Pasif · Tevhit 20.10.2026".
-  - Ozet kartı "Pasif parsel - onay bekliyor": tiklayinca yalnizca onlar listelenir. Filtre kutusu da var.
-  - Sag tik > "Parsel sonucunu onayla (uyariyi kaldir)": uyariyi kaldirir, isin durumu DEGISMEZ.
-  - Ayrinti paneli, rapor ve CSV dokumu parsel sonucunu da icerir.
-Parsel penceresinde ayrintilar icin ENTEGRASYON'un onceki surumundeki maddeler gecerlidir:
-  ilk parsel alinir (727/2-3 -> 727/2), mahalle birebir eslestirilir, eslesmeyenler bir kez secilir ve hatirlanir,
-  isi kapanan parseller sorgulanmaz, gunluk istek sayaci ve ust sinir vardir.
+PARSEL SORGU
+  - Zincir ilk TKGM yanitindaki "gittigiParselListe" alanindan YERELDE okunur; alt parsel icin ayri istek atilmaz
+    (parsel basina 1 istek). Her zincir kaydi kendi "durum" (0 pasif / 1 aktif) bilgisini tasir.
+  - Pencere hizli acilir: ag istekleri arka plandadir, acik isler TEK islemde aktarilir (400 is: 2,6 sn -> 0,05 sn olculdu).
+    Durum cubugunda "Pencere X sn'de acildi" yazar.
+  - Bagli tum isleri kapanmis (Tescillendi/Askida/Iptal) parseller listede GIZLENIR ve sorgulanmaz;
+    "Kapanan islerin parsellerini de goster" kutusuyla gorulur. Bilgiler Fen Klasoru ve Pasif Parseller'de durur.
+  - Sonuclar (zincir dahil) Is Takip veritabanindaki parsel_kontrol tablosuna yazilir.
 
-GUNCELLEME (renkler, coklu parsel, Fen Klasoru)
------------------------------------------------
-* Parsel penceresi artik Is Takip'in temasini izler. Koyu modda satir renkleri koyu ve soluk, yazi acik renk (eskiden
-  acik pastel zemin uzerine acik yazi cikiyordu). Detay penceresi ve grafik de ayni sekilde.
-* Coklu parsel yazimi arka planda ayri parseller olarak okunur (tire / virgul / + / "ve" ayractir, ARALIK DEGILDIR):
-    728/1-2-9-10 -> 728 ada: 1, 2, 9, 10      3469-3511 -> ada yok (0): 3469, 3511      727/2-3 -> 727 ada: 2, 3
-  Kayit formunda yalnizca COKLU parsel yazildiginda kucuk bir "Algilanan: ..." ipucu gorunur.
-* Parsel Sorgu yalnizca ILK parseli sorgular. Sonuc TEVHIT ise isteki diger parseller de ayni tevhide katilmis sayilir:
-  grafikte 727/2 + 727/3* -> 727/13 ("*" = sorgulanmadi, is kaydindan cikarildi).
-* Is Takip'te yeni sekme: "Fen Klasoru". Parsel Sorgu'dan gelen PASIF sonuclar otomatik islenir (eski = isteki tum parseller,
-  yeni = TKGM'deki aktif parseller). Mahalle / ada / parsel ile aranir; parsel eski ya da yeni olarak gecse bulunur
-  ("Eski parsel" / "Yeni parsel" etiketi ve renkle). Elle fen islemi eklenebilir; TKGM kaynakli kayitlar silinemez.
-* Is "Tescillendi" yapilinca o isin "pasif parsel - onay bekliyor" uyarisi kendiliginden onaylanir.
+IS TAKIP
+  - Parsel Sorgu dugmesi hafif sorgu kullanir (dosya klasorlerini taramaz); modul acilista arka planda onceden yuklenir.
+  - Pasif Parseller (liste): Fen Klasoru sekmesinde, tarih araligi satirinda ve Veri menusunde. Alan, nitelik, yeni (aktif)
+    parseller, islem, is durumu; "Yalniz onay bekleyenler" ve arama; cift tik -> hareket listesi (Ozet / Tablo / Grafik).
+  - Fen Klasoru: Duzenle... ile eski/yeni parsel, islem turu, tarih, aciklama elle duzeltilir. Duzenlenen TKGM kaydi
+    kilitlenir (TKGM*), bir daha otomatik ezilmez; "TKGM sonucuna don" ile geri alinir. Zincirdeki ara pasif parseller
+    de aranabilir ("Ara parsel").
+  - Is "Tescillendi" olunca pasif parsel onay uyarisi kendiliginden kalkar.
