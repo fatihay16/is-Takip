@@ -1,0 +1,1734 @@
+# -*- coding: utf-8 -*-
+"""
+Encümen İş Takip - PySide6 arayüzü (1. AŞAMA)
+
+Çalıştırma:   python encumen_qt.py
+Eski program: python encumen_kayit.py   (değişmedi, referans olarak durur)
+
+Bu dosya yalnızca ARAYÜZÜ yapar. İş kuralları, hesaplamalar, SQLite tabloları, yedekleme, rapor ve
+dosya mantığı encumen_kayit.py içinden aynen kullanılır (aşağıda `ek.` ile başlayan çağrılar).
+Aynı veritabanı dosyası (imar_kayitlari.db) kullanılır; tablo yapısı değiştirilmez.
+
+1. aşamada hazır olanlar : ana pencere, 3 sekme, özet kartları, arama, filtreler, tarih aralığı, kayıtlı filtreler,
+                           kayıt tablosu (renkler, sıralama, çoklu seçim, hücre düzenleme), detay paneli,
+                           tema, yazı boyutu, sütun gizleme, silme/geri alma, dosya açma, yedek, rapor, CSV,
+                           TKGM (Parsel Sorgu) açma.
+Sonraki aşamalar        : Form, Toplu Güncelle, Listeler, Silinenler, Rapor ayarları, Pasif Parseller,
+                           Takvim penceresi, Grafikler sekmesi, Fen Klasörü sekmesi.
+"""
+import sys
+
+# Köprü modu: TKGM penceresi bu dosyanın kendisi başka bir süreçte çağrılarak açılır (EXE'de de çalışsın diye).
+if __name__ == "__main__" and "--parsel-baslat" in sys.argv:
+    import parsel_baslat
+    parsel_baslat.calistir(sys.argv[sys.argv.index("--parsel-baslat") + 1:])
+    sys.exit(0)
+
+import os
+import re
+import csv
+import json
+import sqlite3
+import datetime
+import tempfile
+import calendar
+import subprocess
+import importlib.util
+
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtCore import Qt
+
+import encumen_kayit as ek  # iş mantığı (Tkinter penceresi AÇILMAZ; yalnızca fonksiyonlar kullanılır)
+
+YAKINDA = "Bu pencere bir sonraki aşamada PySide6'ya taşınacak. Şimdilik eski programda (encumen_kayit.py) kullanılabilir."
+
+SIRALANABILIR = set(ek.SHOWN) | {"bekleme", "parsel_durum", "parsel_yeni"}
+DUZENLENEMEZ = {"sira", "karar_ok", "makbuz_ok", "bekleme", "parsel_durum", "parsel_yeni"}
+ORTALI = {"sira", "karar_ok", "makbuz_ok", "bekleme"}
+KOLON_AD = {"sira": "Sıra", "karar_ok": "Karar Dosyası", "makbuz_ok": "Makbuz Dosyası"}
+VARSAYILAN_GENISLIK = {"sira": 50, "karar_ok": 100, "makbuz_ok": 100, "bekleme": 95, "parsel_durum": 190,
+                       "parsel_yeni": 150, "aciklama": 170}
+KOLON_NO = {k: i for i, k in enumerate(ek.TV_COLS)}
+
+
+def ayar_yaz(ad, deger):
+    ek.q("INSERT OR REPLACE INTO ayar VALUES (?,?)", (ad, deger))
+
+
+def kolon_baslik(k):
+    return KOLON_AD.get(k) or ek.LAB.get(k, k)
+
+
+# ---------------------------------------------------------------- tema
+def tema():
+    return ek.TEMA_KOYU if ek.KOYU else ek.TEMA_ACIK
+
+
+def palet_yap(t):
+    p = QtGui.QPalette()
+    R = QtGui.QPalette.ColorRole
+    G = QtGui.QPalette.ColorGroup
+    for rol, anahtar in ((R.Window, "BG"), (R.WindowText, "METIN"), (R.Base, "KART"), (R.AlternateBase, "BASLIK"),
+                         (R.Text, "METIN"), (R.Button, "KART"), (R.ButtonText, "METIN"), (R.ToolTipBase, "KART"),
+                         (R.ToolTipText, "METIN"), (R.PlaceholderText, "SOLUK"), (R.BrightText, "KIRMIZI")):
+        p.setColor(rol, QtGui.QColor(t[anahtar]))
+    p.setColor(R.Highlight, QtGui.QColor(t["VURGU"]))
+    p.setColor(R.HighlightedText, QtGui.QColor("white"))
+    for rol in (R.WindowText, R.Text, R.ButtonText):
+        p.setColor(G.Disabled, rol, QtGui.QColor(t["SOLUK"]))
+    return p
+
+
+def qss_yap(t):
+    return f"""
+QToolTip {{ background:{t['KART']}; color:{t['METIN']}; border:1px solid {t['KENAR']}; }}
+QFrame#bant {{ background:#1e293b; }}
+QFrame#bant QLabel {{ background:transparent; color:#cbd5e1; }}
+QLabel#bantBaslik {{ color:white; font-size:15pt; font-weight:bold; padding:11px 0px 11px 18px; }}
+QLabel#bantAlt {{ color:#94a3b8; }}
+QLabel#bildirim {{ color:#fbbf24; padding:0px 18px; }}
+QLabel#temaDugme {{ color:#cbd5e1; padding:0px 14px; }}
+QFrame#kart {{ background:{t['KART']}; border:1px solid {t['KENAR']}; }}
+QFrame#kart QLabel {{ background:transparent; }}
+QLabel#kartSayi {{ font-size:20pt; font-weight:bold; }}
+QLabel#kartBaslik {{ color:{t['SOLUK']}; }}
+QPushButton#vurgu {{ background:{t['VURGU']}; color:white; border:1px solid {t['VURGU']}; border-radius:3px; padding:6px 14px; }}
+QPushButton#vurgu:hover {{ background:{t['VURGU_K']}; }}
+QPushButton#vurgu:disabled {{ background:{t['BASLIK']}; color:{t['SOLUK']}; border:1px solid {t['KENAR']}; }}
+QPushButton#tehlike {{ color:{t['KIRMIZI']}; }}
+QTableView {{ background:{t['KART']}; border:1px solid {t['KENAR']}; gridline-color:{t['KENAR']};
+              selection-background-color:{t['SEC']}; selection-color:{t['METIN']}; }}
+QHeaderView::section {{ background:{t['BASLIK']}; color:{t['METIN']}; padding:6px 7px; border:none; font-weight:bold; }}
+QHeaderView::section:hover {{ background:{t['BHOV']}; }}
+QTextEdit#detay {{ background:{t['KART']}; border:1px solid {t['KENAR']}; }}
+"""
+
+
+# ---------------------------------------------------------------- tablo modeli
+class KayitModel(QtCore.QAbstractTableModel):
+    """Tabloda görünen satırlar. Süzme ve sıralama pencerede (eski program gibi) yapılır; model hazır listeyi gösterir."""
+
+    def __init__(self, pencere):
+        super().__init__(pencere)
+        self.pencere = pencere
+        self.rows = []  # [(iş_id, d), ...]
+
+    def rowCount(self, parent=QtCore.QModelIndex()):
+        return 0 if parent.isValid() else len(self.rows)
+
+    def columnCount(self, parent=QtCore.QModelIndex()):
+        return 0 if parent.isValid() else len(ek.TV_COLS)
+
+    def veri_ata(self, rows):
+        self.beginResetModel()
+        self.rows = rows
+        self.endResetModel()
+
+    def satir_bul(self, iid):
+        for n, (i, _) in enumerate(self.rows):
+            if i == iid:
+                return n
+        return -1
+
+    def flags(self, index):
+        f = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.isValid() and ek.TV_COLS[index.column()] not in DUZENLENEMEZ:
+            f |= Qt.ItemFlag.ItemIsEditable
+        return f
+
+    def data(self, index, rol=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        i, d = self.rows[index.row()]
+        k = ek.TV_COLS[index.column()]
+        if rol in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+            if k == "sira":
+                return index.row() + 1
+            v = d.get(k, "")
+            return "" if v is None else str(v)
+        if rol == Qt.ItemDataRole.BackgroundRole:
+            r = ek.DURUM_UI.get(d.get("onay", ""))
+            return QtGui.QBrush(QtGui.QColor(r)) if r else None
+        if rol == Qt.ItemDataRole.ForegroundRole:
+            if self.pencere.geciken(d) or d.get("parsel_onay"):
+                return QtGui.QBrush(QtGui.QColor(ek.KIRMIZI))
+            return None
+        if rol == Qt.ItemDataRole.TextAlignmentRole:
+            return int((Qt.AlignmentFlag.AlignCenter if k in ORTALI
+                        else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
+        return None
+
+    def headerData(self, bolum, yon, rol=Qt.ItemDataRole.DisplayRole):
+        if yon != Qt.Orientation.Horizontal or rol != Qt.ItemDataRole.DisplayRole:
+            return None
+        k = ek.TV_COLS[bolum]
+        ok = ""
+        sr = self.pencere.siralama
+        if sr and sr[0] == k:
+            ok = " ▼" if sr[1] else " ▲"
+        return kolon_baslik(k) + ok
+
+
+class HucreDelegate(QtWidgets.QStyledItemDelegate):
+    """Hücreye çift tıklayınca / F2 ile yerinde düzenleme. Kaydetme işini pencere.kaydet yapar."""
+
+    def __init__(self, pencere):
+        super().__init__(pencere)
+        self.pencere = pencere
+        self.aktif = None
+
+    def createEditor(self, parent, option, index):
+        k = ek.TV_COLS[index.column()]
+        if k in DUZENLENEMEZ:
+            return None
+        t = ek.LISTE_ALAN.get(k)
+        if t:
+            cb = QtWidgets.QComboBox(parent)
+            cb.setEditable(True)
+            cb.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
+            cb.addItems(ek.liste(t))
+            c = cb.completer()
+            c.setFilterMode(Qt.MatchFlag.MatchContains)
+            c.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            cb.activated.connect(lambda _=0, w=cb: QtCore.QTimer.singleShot(0, lambda: self._bitir(w)))
+            ed = cb
+        else:
+            ed = QtWidgets.QLineEdit(parent)
+        self.aktif = ed
+        ed.destroyed.connect(lambda *_: setattr(self, "aktif", None) if self.aktif is ed else None)
+        return ed
+
+    def _bitir(self, w):
+        try:
+            self.commitData.emit(w)
+            self.closeEditor.emit(w)
+        except RuntimeError:
+            pass
+
+    def setEditorData(self, editor, index):
+        metin = index.data(Qt.ItemDataRole.EditRole) or ""
+        if isinstance(editor, QtWidgets.QComboBox):
+            editor.setEditText(metin)
+            editor.lineEdit().selectAll()
+        else:
+            editor.setText(metin)
+            editor.selectAll()
+
+    def setModelData(self, editor, model, index):
+        metin = editor.currentText() if isinstance(editor, QtWidgets.QComboBox) else editor.text()
+        iid = model.rows[index.row()][0]
+        k = ek.TV_COLS[index.column()]
+        QtCore.QTimer.singleShot(0, lambda: self.pencere.kaydet(iid, k, metin))  # düzenleyici kapandıktan sonra kaydet
+
+    def updateEditorGeometry(self, editor, option, index):
+        r = option.rect
+        if isinstance(editor, QtWidgets.QComboBox):
+            r = QtCore.QRect(r.x(), r.y(), max(r.width(), 150), r.height())
+        editor.setGeometry(r)
+
+
+# ---------------------------------------------------------------- küçük bileşenler
+class TakvimDialog(QtWidgets.QDialog):
+    """Geçici basit tarih seçici (Takvim penceresi 2. aşamada taşınacak). sonuc: None=iptal, ''=temizle, 'gg.aa.yyyy'."""
+
+    def __init__(self, parent, baslangic=""):
+        super().__init__(parent)
+        self.setWindowTitle("Tarih seç")
+        self.sonuc = None
+        v = QtWidgets.QVBoxLayout(self)
+        self.tk = QtWidgets.QCalendarWidget()
+        self.tk.setGridVisible(True)
+        t = ek.tarih_oku(baslangic)
+        if t:
+            self.tk.setSelectedDate(QtCore.QDate(t.year, t.month, t.day))
+        self.tk.activated.connect(lambda *_: self._tamam())
+        v.addWidget(self.tk)
+        h = QtWidgets.QHBoxLayout()
+        for ad, f in (("Tamam", self._tamam), ("Temizle", self._temizle), ("İptal", self.reject)):
+            b = QtWidgets.QPushButton(ad)
+            b.clicked.connect(f)
+            h.addWidget(b)
+        v.addLayout(h)
+
+    def _tamam(self):
+        self.sonuc = self.tk.selectedDate().toString("dd.MM.yyyy")
+        self.accept()
+
+    def _temizle(self):
+        self.sonuc = ""
+        self.accept()
+
+
+class TarihKutu(QtWidgets.QLineEdit):
+    tiklandi = QtCore.Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setReadOnly(True)
+        self.setFixedWidth(100)
+
+    def mousePressEvent(self, e):
+        super().mousePressEvent(e)
+        self.tiklandi.emit()
+
+
+class AramaliCombo(QtWidgets.QComboBox):
+    """Yazdıkça daralan açılır liste (eski AramaliCombobox'ın karşılığı)."""
+
+    def __init__(self, degis, genislik=18):
+        super().__init__()
+        self.setEditable(True)
+        self.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
+        c = self.completer()
+        c.setFilterMode(Qt.MatchFlag.MatchContains)
+        c.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.setMinimumWidth(genislik * 9)
+        self._degis = degis
+        self._zaman = QtCore.QTimer(self)
+        self._zaman.setSingleShot(True)
+        self._zaman.setInterval(300)
+        self._zaman.timeout.connect(self._degis)
+        self.lineEdit().textEdited.connect(lambda _: self._zaman.start())
+        self.lineEdit().returnPressed.connect(self._hemen)
+        self.activated.connect(lambda _: self._hemen())
+
+    def _hemen(self):
+        self._zaman.stop()
+        self._degis()
+
+
+class TarihAraligi(QtWidgets.QWidget):
+    def __init__(self, degis):
+        super().__init__()
+        self.degis = degis
+        self.preset = ""
+        self.duzen = QtWidgets.QHBoxLayout(self)
+        self.duzen.setContentsMargins(6, 0, 6, 6)
+        self.duzen.addWidget(QtWidgets.QLabel("Tarih aralığı:"))
+        self.alan = QtWidgets.QComboBox()
+        self.alan.addItems(list(ek.TARIH_ALANLARI))
+        self.alan.setCurrentText("Encümen Tarih")
+        self.alan.activated.connect(lambda _: self.degis())
+        self.duzen.addWidget(self.alan)
+        self.kutu = {}
+        for ad in ("Başlangıç", "Bitiş"):
+            self.duzen.addWidget(QtWidgets.QLabel(ad + ":"))
+            kt = TarihKutu()
+            kt.tiklandi.connect(lambda ad=ad: self._sec(ad))
+            self.kutu[ad] = kt
+            self.duzen.addWidget(kt)
+        self.hz = QtWidgets.QComboBox()
+        self.hz.addItems(["Bu ay", "Geçen ay", "Son 30 gün", "Bu yıl", "Aralığı temizle"])
+        self.hz.setPlaceholderText("Hızlı seç")
+        self.hz.setCurrentIndex(-1)
+        self.hz.activated.connect(lambda _: self.hizli(self.hz.currentText()))
+        self.duzen.addWidget(self.hz)
+
+    @property
+    def bas(self):
+        return self.kutu["Başlangıç"].text()
+
+    @property
+    def bit(self):
+        return self.kutu["Bitiş"].text()
+
+    def ayarla(self, bas, bit):
+        self.kutu["Başlangıç"].setText(bas)
+        self.kutu["Bitiş"].setText(bit)
+
+    def _sec(self, ad):
+        kt = self.kutu[ad]
+        dlg = TakvimDialog(self.window(), kt.text())
+        dlg.exec()
+        if dlg.sonuc is not None:
+            kt.setText(dlg.sonuc)
+            self.preset = ""
+            self.degis()
+
+    def hizli(self, secim):
+        self.preset = secim if secim in ("Bu ay", "Geçen ay", "Son 30 gün", "Bu yıl") else ""
+        bg = datetime.date.today()
+        if secim == "Bu ay":
+            b, e = bg.replace(day=1), bg.replace(day=calendar.monthrange(bg.year, bg.month)[1])
+        elif secim == "Geçen ay":
+            e = bg.replace(day=1) - datetime.timedelta(days=1)
+            b = e.replace(day=1)
+        elif secim == "Son 30 gün":
+            b, e = bg - datetime.timedelta(days=30), bg
+        elif secim == "Bu yıl":
+            b, e = bg.replace(month=1, day=1), bg.replace(month=12, day=31)
+        else:
+            b = e = None
+        self.ayarla(b.strftime("%d.%m.%Y") if b else "", e.strftime("%d.%m.%Y") if e else "")
+        self.hz.setCurrentIndex(-1)
+        self.degis()
+
+    def temizle(self):
+        self.preset = ""
+        self.ayarla("", "")
+
+    def uygun(self, d):
+        b, e = ek.tarih_oku(self.bas), ek.tarih_oku(self.bit)
+        if b or e:
+            t = ek.tarih_oku(d[ek.TARIH_ALANLARI[self.alan.currentText()]])
+            if not t or (b and t < b) or (e and t > e):
+                return False
+        return True
+
+
+class ListeFiltreleri:
+    ALANLAR = [("islem", "İşlem"), ("muellif", "Müellif"), ("mahalle", "Mahalle"), ("onay", "Durum")]
+
+    def __init__(self, duzen, degis):
+        self.cb, self.vals = {}, {}
+        for k, ad in self.ALANLAR:
+            duzen.addWidget(QtWidgets.QLabel(ad + ":"))
+            cb = AramaliCombo(degis)
+            cb.addItem("(Tümü)")
+            cb.setEditText("(Tümü)")
+            duzen.addWidget(cb)
+            self.cb[k] = cb
+
+    def yenile(self):
+        for k, cb in self.cb.items():
+            v = ek.liste(ek.LISTE_ALAN[k])
+            self.vals[k] = set(v)
+            metin = cb.currentText()
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItems(["(Tümü)"] + v)
+            cb.setEditText(metin)
+            cb.blockSignals(False)
+
+    def temizle(self):
+        for cb in self.cb.values():
+            cb.setEditText("(Tümü)")
+
+    def aktif(self, k):
+        return self.cb[k].currentText().strip() not in ("", "(Tümü)")
+
+    def uygun(self, d):
+        """Listeden seçilen değer birebir eşleşir; elle yazılan kısmi metin 'içinde geçen' olarak aranır."""
+        for k, cb in self.cb.items():
+            v = cb.currentText().strip()
+            if v in ("", "(Tümü)"):
+                continue
+            if v in self.vals.get(k, ()):
+                if d[k] != v:
+                    return False
+            elif ek.tr_lower(v) not in ek.tr_lower(d[k]):
+                return False
+        return True
+
+
+class Kart(QtWidgets.QFrame):
+    def __init__(self, baslik, tikla):
+        super().__init__()
+        self.setObjectName("kart")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._tikla = tikla
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(14, 8, 14, 8)
+        v.setSpacing(0)
+        self.sayi = QtWidgets.QLabel("–")
+        self.sayi.setObjectName("kartSayi")
+        b = QtWidgets.QLabel(baslik)
+        b.setObjectName("kartBaslik")
+        v.addWidget(self.sayi)
+        v.addWidget(b)
+
+    def mousePressEvent(self, e):
+        self._tikla()
+
+    def yaz(self, metin, kirmizi=False):
+        self.sayi.setText(metin)
+        self.sayi.setStyleSheet(f"color:{ek.KIRMIZI};" if kirmizi else "")
+
+
+class TiklaEtiket(QtWidgets.QLabel):
+    tiklandi = QtCore.Signal()
+
+    def mousePressEvent(self, e):
+        self.tiklandi.emit()
+
+
+class AraKutu(QtWidgets.QLineEdit):
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key.Key_Escape:
+            self.clear()
+        else:
+            super().keyPressEvent(e)
+
+
+# ---------------------------------------------------------------- ana pencere
+class AnaPencere(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("İmar Uygulamaları - Encümen Karar ve Makbuz Kayıtları")
+        self.resize(1420, 780)
+        self.setMinimumSize(1000, 560)
+        self.son = None
+        self.siralama = None
+        self.gizli = 0
+        self.gecik_say = 0
+        self.undo = []
+        self.pk = {}
+        self._sessiz = False
+        self._buyut = False
+        self._parsel_proc = None
+        self._parsel_imza = None
+        self._parsel_log = ""
+        self._gen = {k: VARSAYILAN_GENISLIK.get(k, 105) for k in ek.TV_COLS}
+        self._gen_yukleniyor = False
+
+        ek.renk_ata(ek.ayar("tema") == "koyu")
+        try:
+            ek.punto_ata(int(ek.ayar("yazi_boyut") or 10))
+        except ValueError:
+            pass
+
+        for d in (ek.BASE, getattr(sys, "_MEIPASS", ek.BASE)):
+            yol = os.path.join(d, "encumen.ico")
+            if os.path.exists(yol):
+                self.setWindowIcon(QtGui.QIcon(yol))
+                break
+
+        self._yuk_zaman = QtCore.QTimer(self)
+        self._yuk_zaman.setSingleShot(True)
+        self._yuk_zaman.timeout.connect(self.load)
+        self._bildir_zaman = QtCore.QTimer(self)
+        self._bildir_zaman.setSingleShot(True)
+        self._bildir_zaman.timeout.connect(lambda: self.bildirim.setText(""))
+        self._esik_zaman = QtCore.QTimer(self)
+        self._esik_zaman.setSingleShot(True)
+        self._esik_zaman.setInterval(400)
+        self._esik_zaman.timeout.connect(self.esik_degisti)
+        self._parsel_zaman = QtCore.QTimer(self)
+        self._parsel_zaman.setInterval(3000)
+        self._parsel_zaman.timeout.connect(self._parsel_izle)
+
+        self._kur()
+        self._kisayollar()
+        self.tema_uygula()
+        self.ayar_yukle()
+        self.load()
+        QtCore.QTimer.singleShot(500, self.acilis)
+
+    # ------------------------------------------------ arayüz kurulumu
+    def _eylem(self, menu, metin, fonk=None, aktif=True, kutulu=None):
+        a = QtGui.QAction(metin if aktif else metin + "   (sonraki aşama)", self)
+        if kutulu is not None:
+            a.setCheckable(True)
+            a.setChecked(kutulu)
+        if aktif and fonk is not None:
+            if kutulu is not None:
+                a.toggled.connect(lambda _=False, f=fonk: f())
+            else:
+                a.triggered.connect(lambda _=False, f=fonk: f())
+        if not aktif:
+            a.setEnabled(False)
+            a.setToolTip(YAKINDA)
+        menu.addAction(a)
+        return a
+
+    def _menu_dugme(self, metin, menu):
+        b = QtWidgets.QToolButton()
+        b.setText(metin)
+        b.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        b.setMenu(menu)
+        return b
+
+    def _dugme(self, metin, fonk, ad="", aktif=True):
+        b = QtWidgets.QPushButton(metin)
+        if ad:
+            b.setObjectName(ad)
+        if aktif:
+            b.clicked.connect(lambda _=False, f=fonk: f())
+        else:
+            b.setEnabled(False)
+            b.setToolTip(YAKINDA)
+        return b
+
+    def _kur(self):
+        merkez = QtWidgets.QWidget()
+        self.setCentralWidget(merkez)
+        ana = QtWidgets.QVBoxLayout(merkez)
+        ana.setContentsMargins(0, 0, 0, 0)
+        ana.setSpacing(0)
+
+        # --- üst bant
+        bant = QtWidgets.QFrame()
+        bant.setObjectName("bant")
+        bh = QtWidgets.QHBoxLayout(bant)
+        bh.setContentsMargins(0, 0, 0, 0)
+        l1 = QtWidgets.QLabel("İmar Uygulamaları")
+        l1.setObjectName("bantBaslik")
+        l2 = QtWidgets.QLabel("Encümen karar ve makbuz kayıtları")
+        l2.setObjectName("bantAlt")
+        self.bildirim = QtWidgets.QLabel("")
+        self.bildirim.setObjectName("bildirim")
+        self.tema_dugme = TiklaEtiket()
+        self.tema_dugme.setObjectName("temaDugme")
+        self.tema_dugme.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tema_dugme.tiklandi.connect(self.tema_degistir)
+        bh.addWidget(l1)
+        bh.addWidget(l2)
+        bh.addStretch(1)
+        bh.addWidget(self.bildirim)
+        bh.addWidget(self.tema_dugme)
+        ana.addWidget(bant)
+
+        # --- sekmeler
+        self.nb = QtWidgets.QTabWidget()
+        kap = QtWidgets.QWidget()
+        kap.setContentsMargins(0, 0, 0, 0)
+        ana.addWidget(self.nb, 1)
+        self.nb.addTab(kap, "Kayıtlar")
+        for ad in ("Grafikler", "Fen Klasörü"):
+            sf = QtWidgets.QWidget()
+            sv = QtWidgets.QVBoxLayout(sf)
+            et = QtWidgets.QLabel(f"“{ad}” sekmesi bir sonraki aşamada PySide6'ya taşınacak.\n"
+                                  "Şimdilik eski programda (encumen_kayit.py) kullanılabilir. Verileriniz aynı veritabanındadır.")
+            et.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            sv.addWidget(et)
+            self.nb.addTab(sf, ad)
+        self.nb.currentChanged.connect(self._sekme_degisti)
+
+        sek = QtWidgets.QVBoxLayout(kap)
+        sek.setContentsMargins(6, 8, 6, 4)
+
+        # --- özet kartları
+        kr = QtWidgets.QHBoxLayout()
+        self.kartlar = {}
+        for anahtar, baslik in (("acik", "Açık işler"), ("encumen", "Bu ay encümen"), ("gecik", "Geciken işler"),
+                                ("harc", "Bu ay tahsil edilen harç"), ("parsel", "Pasif parsel — onay bekliyor")):
+            kt = Kart(baslik, lambda a=anahtar: self.kart_tikla(a))
+            kr.addWidget(kt, 1)
+            self.kartlar[anahtar] = kt
+        sek.addLayout(kr)
+
+        # --- arama + düğmeler + menüler
+        ust = QtWidgets.QHBoxLayout()
+        ust.addWidget(QtWidgets.QLabel("Ara:"))
+        self.ara = AraKutu()
+        self.ara.setMinimumWidth(190)
+        self.ara.textChanged.connect(lambda _: self.load_gecikmeli())
+        ust.addWidget(self.ara)
+        ust.addWidget(self._dugme("Yeni", None, "vurgu", aktif=False))
+        ust.addWidget(self._dugme("Formda Düzenle", None, aktif=False))
+        ust.addWidget(self._dugme("Toplu Güncelle", None, aktif=False))
+        ust.addWidget(self._dugme("Sil", self.sil, "tehlike"))
+        ust.addWidget(self._dugme("Kararı Aç", lambda: self.ac("karar")))
+        ust.addWidget(self._dugme("Makbuzu Aç", lambda: self.ac("makbuz")))
+
+        ym = QtWidgets.QMenu(self)
+        self._eylem(ym, "Şimdi yedekle", self.yedek_simdi)
+        self._eylem(ym, "Yedek klasörünü seç", self.yedek_klasoru_sec)
+        self._eylem(ym, "Yedekten geri yükle", self.yedek_geri_yukle)
+        ust.addWidget(self._menu_dugme("Yedek", ym))
+
+        vm = QtWidgets.QMenu(self)
+        self._eylem(vm, "Son işlemi geri al (Ctrl+Z)", self.geri_al)
+        vm.addSeparator()
+        self._eylem(vm, "Parsel Sorgu (TKGM)...", self.parsel_sorgu_ac)
+        self._eylem(vm, "Pasif Parseller (liste)...", None, aktif=False)
+        self._eylem(vm, "Listeler (mahalle, müellif, işlem, durum)...", None, aktif=False)
+        self._eylem(vm, "CSV Al (Google E-Tablo'dan)...", self.csv_al)
+        self._eylem(vm, "CSV Aktar (tüm kayıtlar)...", self.csv_aktar)
+        self._eylem(vm, "Dosya klasörleri (isteğe bağlı)...", self.klasorler)
+        vm.addSeparator()
+        self._eylem(vm, "Son silinenler (geri getir)...", None, aktif=False)
+        ust.addWidget(self._menu_dugme("Veri", vm))
+
+        rm = QtWidgets.QMenu(self)
+        self._eylem(rm, "Görünen liste (yazdır / PDF)", self.rapor_liste)
+        self._eylem(rm, "Müellife göre harç dökümü (yazdır / PDF)", self.rapor_muellif)
+        self._eylem(rm, "Görünen listeyi Excel'e aktar (CSV)", self.excel_aktar)
+        rm.addSeparator()
+        self._eylem(rm, "Rapor başlığı ve imza ayarları...", None, aktif=False)
+        ust.addWidget(self._menu_dugme("Rapor", rm))
+
+        em = QtWidgets.QMenu(self)
+        self.koyu_eylem = self._eylem(em, "Koyu tema", self.tema_degistir, kutulu=ek.KOYU)
+        self.detay_eylem = self._eylem(em, "Detay paneli (F3)", self.detay_ac_kapa, kutulu=False)
+        em.addSeparator()
+        self._eylem(em, "Yazıyı büyüt (Ctrl + tekerlek yukarı  /  Ctrl +)", lambda: self.yazi_boyut(1))
+        self._eylem(em, "Yazıyı küçült (Ctrl + tekerlek aşağı  /  Ctrl -)", lambda: self.yazi_boyut(-1))
+        self._eylem(em, "Varsayılan yazı boyutu (Ctrl 0)", lambda: self.yazi_boyut(None))
+        em.addSeparator()
+        sm = em.addMenu("Sütunları göster / gizle")
+        self.sutun_eylem = {}
+        for k in ek.TV_COLS[1:]:
+            self.sutun_eylem[k] = self._eylem(sm, ek.SUTUN_AD.get(k) or ek.LAB.get(k, k), self.sutun_uygula, kutulu=True)
+        ust.addWidget(self._menu_dugme("Ekran", em))
+        ust.addStretch(1)
+        sek.addLayout(ust)
+
+        # --- görünüm + liste filtreleri
+        f2 = QtWidgets.QHBoxLayout()
+        f2.addWidget(QtWidgets.QLabel("Görünüm:"))
+        self.gorunum = QtWidgets.QComboBox()
+        self.gorunum.addItems(ek.GORUNUMLER)
+        self.gorunum.setMinimumWidth(300)
+        self.gorunum.activated.connect(lambda _: self.degis())
+        f2.addWidget(self.gorunum)
+        self.lf = ListeFiltreleri(f2, self.degis)
+        f2.addWidget(self._dugme("Filtreleri Temizle", self.fil_temizle))
+        self.eksik = QtWidgets.QCheckBox("Dosyası eksik olanlar (✗)")
+        self.eksik.toggled.connect(lambda _: self.degis())
+        f2.addWidget(self.eksik)
+        self.parsel_f = QtWidgets.QCheckBox("Pasif parsel (onay bekliyor)")
+        self.parsel_f.toggled.connect(lambda _: self.degis())
+        f2.addWidget(self.parsel_f)
+        f2.addStretch(1)
+        sek.addLayout(f2)
+
+        # --- tarih aralığı + gecikme + kayıtlı filtreler
+        self.ta = TarihAraligi(self.degis)
+        self.gecik = QtWidgets.QCheckBox("Geciken işler")
+        self.gecik.toggled.connect(lambda _: self.degis())
+        self.ta.duzen.addSpacing(10)
+        self.ta.duzen.addWidget(self.gecik)
+        self.ta.duzen.addWidget(QtWidgets.QLabel("Eşik (gün):"))
+        self.esik_kutu = QtWidgets.QSpinBox()
+        self.esik_kutu.setRange(1, 365)
+        self.esik_kutu.setKeyboardTracking(False)
+        try:
+            self.esik_kutu.setValue(int(ek.ayar("gecikme_gun") or 30))
+        except ValueError:
+            self.esik_kutu.setValue(30)
+        self.esik_kutu.valueChanged.connect(lambda _: self._esik_zaman.start())
+        self.ta.duzen.addWidget(self.esik_kutu)
+        self.ta.duzen.addStretch(1)
+        self.gm = QtWidgets.QMenu(self)
+        self.gm.aboutToShow.connect(self.gm_doldur)
+        self.ta.duzen.addWidget(self._menu_dugme("Kayıtlı filtreler", self.gm))
+        self.ta.duzen.addWidget(self._dugme("Parsel Sorgu", self.parsel_sorgu_ac))
+        self.ta.duzen.addWidget(self._dugme("Pasif Parseller", None, aktif=False))
+        sek.addWidget(self.ta)
+
+        # --- tablo + detay paneli
+        self.model = KayitModel(self)
+        self.tablo = QtWidgets.QTableView()
+        self.tablo.setModel(self.model)
+        self.delegate = HucreDelegate(self)
+        self.tablo.setItemDelegate(self.delegate)
+        self.tablo.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tablo.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tablo.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tablo.setShowGrid(False)
+        self.tablo.setWordWrap(False)
+        self.tablo.verticalHeader().setVisible(False)
+        self.tablo.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.tablo.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel)
+        hdr = self.tablo.horizontalHeader()
+        hdr.setSectionsClickable(True)
+        hdr.setSectionsMovable(False)
+        hdr.setStretchLastSection(False)
+        hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        for k, i in KOLON_NO.items():
+            self.tablo.setColumnWidth(i, self._gen[k])
+        hdr.sectionResized.connect(self._kolon_boyut)
+        hdr.sectionClicked.connect(self.baslik_tikla)
+        self.tablo.pressed.connect(self._basildi)
+        self.tablo.doubleClicked.connect(self.cift)
+        self.tablo.selectionModel().selectionChanged.connect(lambda *_: self.detay_guncelle())
+        self.tablo.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tablo.customContextMenuRequested.connect(self.sag)
+        self.tablo.viewport().installEventFilter(self)
+
+        self.menu = QtWidgets.QMenu(self)
+        self._eylem(self.menu, "Bu hücreyi düzenle (F2)", self.f2)
+        self._eylem(self.menu, "Satırı formda düzenle", None, aktif=False)
+        self._eylem(self.menu, "Seçili satırları toplu güncelle...", None, aktif=False)
+        self._eylem(self.menu, "Satırı çoğalt (aynı parsele yeni işlem)", None, aktif=False)
+        self._eylem(self.menu, "Hücreyi / seçili satırları kopyala (Ctrl+C)", self.kopyala)
+        self._eylem(self.menu, "Parsel sonucunu onayla (uyarıyı kaldır)", self.parsel_onayla)
+        self._eylem(self.menu, "Kararı aç", lambda: self.ac("karar"))
+        self._eylem(self.menu, "Makbuzu aç", lambda: self.ac("makbuz"))
+        self._eylem(self.menu, "Karar dosyasını seç / değiştir...", lambda: self.dosya_sec("karar"))
+        self._eylem(self.menu, "Makbuz dosyasını seç / değiştir...", lambda: self.dosya_sec("makbuz"))
+        self._eylem(self.menu, "Satırı sil", self.sil)
+
+        self.detay = QtWidgets.QTextEdit()
+        self.detay.setObjectName("detay")
+        self.detay.setReadOnly(True)
+        self.detay.setMinimumWidth(260)
+        self.bolme = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
+        self.bolme.addWidget(self.tablo)
+        self.bolme.addWidget(self.detay)
+        self.bolme.setStretchFactor(0, 1)
+        self.bolme.setStretchFactor(1, 0)
+        self.bolme.setSizes([1000, 320])
+        self.bolme.setChildrenCollapsible(False)
+        self.detay.setVisible(False)
+        self.detay_acik = False
+        sek.addWidget(self.bolme, 1)
+
+        # --- durum satırı + renk açıklaması
+        self.durum_etiket = QtWidgets.QLabel()
+        sek.addWidget(self.durum_etiket)
+        lg = QtWidgets.QHBoxLayout()
+        lg.addWidget(QtWidgets.QLabel("Renkler:"))
+        self.lejant = {}
+        for ad in ek.DURUM_RENK:
+            e = QtWidgets.QLabel(ad)
+            e.setContentsMargins(6, 0, 6, 0)
+            self.lejant[ad] = e
+            lg.addWidget(e)
+        lg.addWidget(QtWidgets.QLabel("      Dosya:  ✓ var   ✗ yok   ? klasöre ulaşılamıyor"))
+        lg.addStretch(1)
+        sek.addLayout(lg)
+
+        self.tablo_yazi_uygula()
+
+    def _kisayollar(self):
+        def ks(tus, fonk, baglam=Qt.ShortcutContext.WindowShortcut, ust=None):
+            s = QtGui.QShortcut(QtGui.QKeySequence(tus), ust or self)
+            s.setContext(baglam)
+            s.activated.connect(fonk)
+            return s
+        ks("Ctrl+F", lambda: (self.nb.setCurrentIndex(0), self.ara.setFocus(), self.ara.selectAll()))
+        ks("Ctrl+Z", self.geri_al)
+        ks("F5", lambda: (ek.dosya_cache_temizle(), self.load()))
+        ks("F3", lambda: self.detay_eylem.setChecked(not self.detay_eylem.isChecked()))
+        for t in ("Ctrl++", "Ctrl+="):
+            ks(t, lambda: self.yazi_boyut(1))
+        ks("Ctrl+-", lambda: self.yazi_boyut(-1))
+        ks("Ctrl+0", lambda: self.yazi_boyut(None))
+        ks("F2", self.f2, Qt.ShortcutContext.WidgetShortcut, self.tablo)
+        ks("Delete", self.sil, Qt.ShortcutContext.WidgetShortcut, self.tablo)
+        ks("Ctrl+C", self.kopyala, Qt.ShortcutContext.WidgetShortcut, self.tablo)
+
+    def eventFilter(self, nesne, olay):
+        if nesne is self.tablo.viewport() and olay.type() == QtCore.QEvent.Type.Wheel:
+            if olay.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.yazi_boyut(1 if olay.angleDelta().y() > 0 else -1)
+                return True
+        return super().eventFilter(nesne, olay)
+
+    def _sekme_degisti(self, i):
+        pass  # Grafikler / Fen Klasörü sekmeleri sonraki aşamada
+
+    # ------------------------------------------------ tema ve yazı
+    def tema_uygula(self):
+        t = tema()
+        app = QtWidgets.QApplication.instance()
+        app.setPalette(palet_yap(t))
+        app.setStyleSheet(qss_yap(t))
+        self.tema_dugme.setText("◐  Açık tema" if ek.KOYU else "◐  Koyu tema")
+        self.koyu_eylem.blockSignals(True)
+        self.koyu_eylem.setChecked(ek.KOYU)
+        self.koyu_eylem.blockSignals(False)
+        for ad, e in self.lejant.items():
+            e.setStyleSheet(f"background:{ek.DURUM_UI[ad]}; color:{t['METIN']};")
+        self.tablo_yazi_uygula()
+        self.model.layoutChanged.emit()
+        self.detay_guncelle()
+
+    def tema_degistir(self):
+        self.edit_kapat()
+        ek.renk_ata(not ek.KOYU)
+        ayar_yaz("tema", "koyu" if ek.KOYU else "acik")
+        self.tema_uygula()
+        self.kart_guncelle(self.tum_kayitlar())  # kart sayılarının kırmızı rengi temaya göre yenilenir
+
+    def tablo_yazi_uygula(self):
+        n = ek.TABLO_PUNTO
+        f = QtGui.QFont("Segoe UI")
+        f.setPointSize(n)
+        self.tablo.setFont(f)
+        hf = QtGui.QFont("Segoe UI")
+        hf.setPointSize(max(9, n))
+        hf.setBold(True)
+        self.tablo.horizontalHeader().setFont(hf)
+        self.tablo.verticalHeader().setDefaultSectionSize(round(n * 2.8))
+
+    def yazi_boyut(self, d):
+        self.edit_kapat()
+        n = 10 if d is None else max(8, min(20, ek.TABLO_PUNTO + d))
+        if n == ek.TABLO_PUNTO:
+            return
+        ek.punto_ata(n)
+        self.tablo_yazi_uygula()
+        ayar_yaz("yazi_boyut", str(n))
+        self.bildir(f"Tablo yazı boyutu: {n}", 1500)
+
+    def bildir(self, metin, ms=4000):
+        self.bildirim.setText(metin)
+        self._bildir_zaman.start(ms)
+
+    # ------------------------------------------------ sütunlar, detay paneli, pencere ayarları
+    def _kolon_boyut(self, i, eski, yeni):
+        if self._gen_yukleniyor or yeni <= 0 or self.tablo.isColumnHidden(i):
+            return
+        self._gen[ek.TV_COLS[i]] = int(yeni)
+
+    def sutun_uygula(self, kaydet=True):
+        self.edit_kapat()
+        gor = [k for k in ek.TV_COLS[1:] if self.sutun_eylem[k].isChecked()]
+        if not gor:  # hiç sütun kalmasın
+            for a in self.sutun_eylem.values():
+                a.blockSignals(True)
+                a.setChecked(True)
+                a.blockSignals(False)
+            gor = list(ek.TV_COLS[1:])
+        self._gen_yukleniyor = True
+        for k, i in KOLON_NO.items():
+            self.tablo.setColumnHidden(i, k != "sira" and k not in gor)
+            if not self.tablo.isColumnHidden(i):
+                self.tablo.setColumnWidth(i, self._gen[k])
+        self._gen_yukleniyor = False
+        if kaydet:
+            ayar_yaz("gizli_sutun", json.dumps([k for k in ek.TV_COLS[1:] if not self.sutun_eylem[k].isChecked()]))
+
+    def detay_ac_kapa(self, kaydet=True):
+        self.detay_acik = self.detay_eylem.isChecked()
+        self.detay.setVisible(self.detay_acik)
+        if self.detay_acik:
+            self.bolme.setSizes([max(self.bolme.width() - 320, 400), 320])
+            self.detay_guncelle()
+        if kaydet:
+            ayar_yaz("detay", "1" if self.detay_acik else "0")
+
+    def detay_guncelle(self):
+        if not getattr(self, "detay_acik", False):
+            return
+        t = tema()
+        e = f"color:{t['SOLUK']};font-weight:bold;font-size:9pt"
+        dd = "font-size:11pt;margin-bottom:10px"
+        sec = self.secili_satirlar()
+        h = []
+        if not sec:
+            h.append(f"<span style='color:{t['SOLUK']}'>Ayrıntısını görmek için tablodan bir satır seçin.</span>")
+        elif len(sec) > 1:
+            h.append(f"<span style='color:{t['SOLUK']}'>{len(sec)} kayıt seçili.<br><br>"
+                     "Birlikte değiştirmek için «Toplu Güncelle»yi kullanabilirsiniz.</span>")
+        else:
+            iid, d = sec[0]
+
+            def alan(ad, v):
+                h.append(f"<div style='{e}'>{ek.hesc(ad)}</div><div style='{dd}'>{ek.hesc(str(v or '–'))}</div>")
+            for k in ek.SHOWN:
+                alan(ek.LAB[k], d[k])
+            for k, ad in (("karar_ok", "Karar dosyası"), ("makbuz_ok", "Makbuz dosyası"), ("bekleme", "Bekleme (gün)")):
+                alan(ad, d[k])
+            pk = self.pk.get(iid)
+            if pk:
+                for ad, v in (("Parsel durumu (TKGM)", d["parsel_durum"]), ("Sorgulanan parsel", pk["parsel_no"]),
+                              ("Alan / nitelik", f"{pk['alan'] or '–'} m² · {pk['nitelik'] or '–'}"),
+                              ("Yeni (aktif) parseller", d["parsel_yeni"]), ("TKGM açıklaması", pk["aciklama"]),
+                              ("Son parsel kontrolü", (pk["son_kontrol"] or "").replace("T", " ")[:16])):
+                    alan(ad, v)
+        self.detay.setHtml("".join(h))
+
+    def ayar_kaydet(self):
+        zoom = self.isMaximized()
+        ayar_yaz("pencere_durum", "zoomed" if zoom else "normal")
+        if not zoom:
+            g = self.geometry()
+            ayar_yaz("pencere", f"{g.width()}x{g.height()}+{g.x()}+{g.y()}")
+        ayar_yaz("sutunlar", json.dumps({c: int(self._gen[c]) for c in ek.TV_COLS}))
+
+    def ayar_yukle(self):
+        try:
+            m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$", ek.ayar("pencere"))
+            if m:
+                w, h, x, y = map(int, m.groups())
+                ekran = QtGui.QGuiApplication.primaryScreen().geometry()
+                sw, sh = ekran.width(), ekran.height()
+                w, h = min(w, sw), min(h, sh)
+                x, y = min(max(x, 0), max(sw - w, 0)), min(max(y, 0), max(sh - h - 40, 0))
+                self.setGeometry(x, y, w, h)
+            for c, w in json.loads(ek.ayar("sutunlar") or "{}").items():
+                if c in self._gen and isinstance(w, int) and 20 <= w <= 900:
+                    self._gen[c] = w
+        except Exception:
+            pass
+        try:
+            gizli = json.loads(ek.ayar("gizli_sutun") or "[]")
+            for k, a in self.sutun_eylem.items():
+                a.blockSignals(True)
+                a.setChecked(k not in gizli)
+                a.blockSignals(False)
+        except Exception:
+            pass
+        self.sutun_uygula(kaydet=False)
+        try:
+            self.detay_eylem.blockSignals(True)
+            self.detay_eylem.setChecked(ek.ayar("detay") == "1")
+            self.detay_eylem.blockSignals(False)
+            self.detay_ac_kapa(kaydet=False)
+        except Exception:
+            pass
+        try:
+            self._buyut = ek.ayar("pencere_durum") == "zoomed"
+        except Exception:
+            pass
+
+    def closeEvent(self, e):
+        self.edit_kapat()
+        try:
+            self.ayar_kaydet()
+        except Exception:
+            pass
+        try:
+            ek.yedekle()
+        except Exception:
+            pass
+        e.accept()
+
+    # ------------------------------------------------ liste / filtre / sıralama
+    def degis(self):
+        if not self._sessiz:
+            self.load()
+
+    def load_gecikmeli(self, ms=250):
+        if not self._sessiz:
+            self._yuk_zaman.start(ms)
+
+    def fil_yenile(self):
+        self.lf.yenile()
+
+    def filtre_sifirla(self):
+        self._sessiz = True
+        try:
+            self.lf.temizle()
+            self.ta.temizle()
+            self.gorunum.setCurrentText(ek.GORUNUMLER[0])
+            self.eksik.setChecked(False)
+            self.gecik.setChecked(False)
+            self.parsel_f.setChecked(False)
+            self.ara.setText("")
+        finally:
+            self._sessiz = False
+
+    def fil_temizle(self):
+        self.filtre_sifirla()
+        self.load()
+
+    def esik(self):
+        return max(self.esik_kutu.value(), 0)
+
+    def esik_degisti(self):
+        ayar_yaz("gecikme_gun", str(self.esik()))
+        self.load()
+
+    def geciken(self, d):
+        b = d.get("bekleme")
+        return bool(b) and int(b) > self.esik()
+
+    def uygun(self, d, gorunum=True):
+        if not self.lf.uygun(d) or not self.ta.uygun(d):
+            return False
+        g = self.gorunum.currentText()
+        if gorunum and not self.lf.aktif("onay"):  # Durum seçilmişse o seçim geçerli
+            if g == ek.GORUNUMLER[0] and ek.arsiv_mi(d["onay"]):
+                return False
+            if g == ek.GORUNUMLER[2] and not ek.arsiv_mi(d["onay"]):
+                return False
+        if self.eksik.isChecked() and "✗" not in (d["karar_ok"], d["makbuz_ok"]):
+            return False
+        if self.gecik.isChecked() and not self.geciken(d):
+            return False
+        if self.parsel_f.isChecked() and not d.get("parsel_onay"):
+            return False
+        n = ek.tr_lower(self.ara.text().strip())
+        return not n or n in ek.tr_lower(" ".join(d[k] for k in ek.KEYS))
+
+    def tum_kayitlar(self):
+        idx = {tur: ek.dosya_indeksi(ek.ayar(tur + "_klasor")) for tur in ("karar", "makbuz")}
+        sonuc, onb, bugun = [], {}, datetime.date.today()
+        self.pk = pk = ek.parsel_kontrol_oku()
+        oto = ek.parsel_otomatik_onay(pk)
+        if oto:
+            self.bildir(f"{oto} pasif parsel uyarısı onaylandı (iş 'Tescillendi' olduğu için)")
+        for r in ek.q(f"SELECT id,{','.join(ek.KEYS)},durum_tarihi FROM kayit ORDER BY id"):
+            d = dict(zip(ek.KEYS, [x or "" for x in r[1:-1]]))
+            d["durum_tarihi"] = r[-1] or ""
+            d["bekleme"] = ek.bekleme_gun(d, bugun)
+            d.update(ek.parsel_gosterim(pk.get(r[0])))
+            d["karar_ok"] = ek.dosya_isaret("karar", d, idx["karar"], onb)
+            d["makbuz_ok"] = ek.dosya_isaret("makbuz", d, idx["makbuz"], onb)
+            sonuc.append((r[0], d))
+        return sonuc
+
+    def load(self):
+        self.edit_kapat()
+        self.fil_yenile()
+        tum = self.tum_kayitlar()
+        rows = [r for r in tum if self.uygun(r[1])]
+        self.gecik_say = sum(1 for _, d in rows if self.geciken(d))
+        self.gizli = 0
+        if self.gorunum.currentText() == ek.GORUNUMLER[0] and not self.lf.aktif("onay"):
+            self.gizli = sum(1 for _, d in tum if ek.arsiv_mi(d["onay"]) and self.uygun(d, False))
+        if self.siralama:
+            k, ters = self.siralama
+            dolu = [r for r in rows if r[1][k]]
+            bos = [r for r in rows if not r[1][k]]
+            dolu.sort(key=lambda r: ek.sort_key(k, r[1][k]), reverse=ters)
+            rows = dolu + bos
+        self.model.veri_ata(rows)
+        self.model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(ek.TV_COLS) - 1)
+        self.durum_guncelle()
+        self.kart_guncelle(tum)
+        self.detay_guncelle()
+        try:
+            ek.fen_senkronla()  # yeni TKGM sonuçları Fen Klasörü'ne işlenir
+        except Exception:
+            pass
+
+    def yenile_koru(self, iid=None):
+        kay = self.tablo.verticalScrollBar().value()
+        self.load()
+        self.tablo.verticalScrollBar().setValue(kay)
+        if iid:
+            r = self.model.satir_bul(iid)
+            if r >= 0:
+                self.tablo.selectRow(r)
+
+    def durum_guncelle(self):
+        toplam = sum(ek.para(d["alinan_ucret"]) for _, d in self.model.rows)
+        gz = f"    ·  {self.gizli} arşiv iş gizli (Görünüm: Tümü ile görürsünüz)" if self.gizli else ""
+        gc = f"    ·  ⚠ {self.gecik_say} geciken iş" if self.gecik_say else ""
+        self.durum_etiket.setText(f"{len(self.model.rows)} kayıt    Toplam Alınan Ücret: {ek.para_yaz(toplam)}{gz}{gc}    "
+                                  "(Çift tıkla: hücre düzenle · Ctrl/Shift ile çoklu seçim → Toplu Güncelle · başlığa tıkla: sırala)")
+
+    def baslik_tikla(self, i):
+        k = ek.TV_COLS[i]
+        if k == "sira":
+            self.siralama = None
+            self.load()
+        elif k in SIRALANABILIR:
+            if self.siralama and self.siralama[0] == k:
+                self.siralama = (k, not self.siralama[1])
+            else:
+                self.siralama = (k, False)
+            self.load()
+
+    def kart_guncelle(self, tum):
+        bg = datetime.date.today()
+        acik = encumen = gecik = parsel = 0
+        harc = 0.0
+        for _, d in tum:
+            if not ek.arsiv_mi(d["onay"]):
+                acik += 1
+            t = ek.tarih_oku(d["encumen_tarihi"])
+            if t and (t.year, t.month) == (bg.year, bg.month):
+                encumen += 1
+            if self.geciken(d):
+                gecik += 1
+            if d.get("parsel_onay"):
+                parsel += 1
+            t = ek.tarih_oku(d["makbuz_tarihi"])
+            if t and (t.year, t.month) == (bg.year, bg.month):
+                harc += ek.para(d["alinan_ucret"])
+        self.kartlar["acik"].yaz(str(acik))
+        self.kartlar["encumen"].yaz(str(encumen))
+        self.kartlar["gecik"].yaz(str(gecik), bool(gecik))
+        self.kartlar["harc"].yaz(ek.para_yaz(harc, 0))
+        self.kartlar["parsel"].yaz(str(parsel), bool(parsel))
+
+    def kart_tikla(self, a):
+        self.filtre_sifirla()
+        if a in ("encumen", "harc"):
+            self._sessiz = True
+            self.gorunum.setCurrentText(ek.GORUNUMLER[1])
+            self.ta.alan.setCurrentText("Encümen Tarih" if a == "encumen" else "Ödeme Makbuz Tarih")
+            self._sessiz = False
+            self.ta.hizli("Bu ay")  # listeyi de yeniler
+        else:
+            self._sessiz = True
+            if a == "gecik":
+                self.gecik.setChecked(True)
+            elif a == "parsel":
+                self.parsel_f.setChecked(True)
+            self._sessiz = False
+            self.load()
+
+    # ------------------------------------------------ kayıtlı filtreler
+    def gorunum_al(self):
+        return {"gorunum": self.gorunum.currentText(), "lf": {k: cb.currentText() for k, cb in self.lf.cb.items()},
+                "alan": self.ta.alan.currentText(), "bas": self.ta.bas, "bit": self.ta.bit, "preset": self.ta.preset,
+                "ara": self.ara.text(), "eksik": bool(self.eksik.isChecked()), "gecik": bool(self.gecik.isChecked()),
+                "siralama": list(self.siralama) if self.siralama else None}
+
+    def gorunum_uygula(self, v):
+        self.filtre_sifirla()
+        self._sessiz = True
+        try:
+            if v.get("gorunum") in ek.GORUNUMLER:
+                self.gorunum.setCurrentText(v["gorunum"])
+            for k, val in v.get("lf", {}).items():
+                if k in self.lf.cb:
+                    self.lf.cb[k].setEditText(val)
+            if v.get("alan") in ek.TARIH_ALANLARI:
+                self.ta.alan.setCurrentText(v["alan"])
+            self.ara.setText(v.get("ara", ""))
+            self.eksik.setChecked(bool(v.get("eksik")))
+            self.gecik.setChecked(bool(v.get("gecik")))
+            sr = v.get("siralama")
+            self.siralama = tuple(sr) if sr else None
+        finally:
+            self._sessiz = False
+        if v.get("preset"):
+            self.ta.hizli(v["preset"])  # "Bu ay" gibi göreli aralıklar her seferinde güncel hesaplanır; listeyi de yeniler
+        else:
+            self.ta.ayarla(v.get("bas", ""), v.get("bit", ""))
+            self.load()
+
+    def gm_doldur(self):
+        m = self.gm
+        m.clear()
+        self._eylem(m, "Geçerli filtreyi kaydet...", self.gorunum_kaydet)
+        m.addSeparator()
+        for ad, v in ek.BAZI_GORUNUM.items():
+            self._eylem(m, ad, lambda v=v: self.gorunum_uygula(v))
+        kayitli = sorted(ek.q("SELECT ad, veri FROM gorunum"), key=lambda r: ek.tr_sira(r[0]))
+        if kayitli:
+            m.addSeparator()
+            for ad, veri in kayitli:
+                self._eylem(m, ad, lambda veri=veri: self.gorunum_uygula(json.loads(veri)))
+            sm = m.addMenu("Kayıtlı filtreyi sil")
+            for ad, _ in kayitli:
+                self._eylem(sm, ad, lambda ad=ad: self.gorunum_sil(ad))
+
+    def gorunum_kaydet(self):
+        ad, tamam = QtWidgets.QInputDialog.getText(self, "Filtreyi kaydet", "Bu filtre kombinasyonuna bir ad verin:")
+        if not tamam or not ad.strip():
+            return
+        ad = ad.strip()
+        if ek.q("SELECT 1 FROM gorunum WHERE ad=?", (ad,)) and not self.sor("Kayıtlı filtre", f"“{ad}” adlı filtre zaten var. Üzerine yazılsın mı?"):
+            return
+        ek.q("INSERT OR REPLACE INTO gorunum VALUES (?,?)", (ad, json.dumps(self.gorunum_al(), ensure_ascii=False)))
+        self.bildir(f"Filtre kaydedildi: {ad}")
+
+    def gorunum_sil(self, ad):
+        if self.sor("Kayıtlı filtreyi sil", f"“{ad}” silinsin mi?"):
+            ek.q("DELETE FROM gorunum WHERE ad=?", (ad,))
+            self.bildir(f"Filtre silindi: {ad}")
+
+    # ------------------------------------------------ mesaj kutuları
+    def bilgi(self, baslik, metin):
+        QtWidgets.QMessageBox.information(self, baslik, metin)
+
+    def uyari(self, baslik, metin):
+        QtWidgets.QMessageBox.warning(self, baslik, metin)
+
+    def hata(self, baslik, metin):
+        QtWidgets.QMessageBox.critical(self, baslik, metin)
+
+    def sor(self, baslik, metin):
+        B = QtWidgets.QMessageBox.StandardButton
+        return QtWidgets.QMessageBox.question(self, baslik, metin, B.Yes | B.No, B.No) == B.Yes
+
+    # ------------------------------------------------ geri alma
+    def undo_push(self, ad, onceki, silinme=None):
+        self.undo.append({"ad": ad, "onceki": onceki, "silinme": silinme})
+        del self.undo[:-50]
+
+    def undo_onceki(self, ad, ids):
+        self.undo_push(ad, ek.kayit_snapshot(ids))
+
+    def undo_temizle(self):
+        self.undo.clear()
+
+    def geri_al(self):
+        if not self.undo:
+            self.bildir("Geri alınacak işlem yok")
+            return
+        e = self.undo.pop()
+        ek.undo_uygula(e)
+        self.yenile_koru()
+        self.bildir("Geri alındı: " + e["ad"])
+
+    # ------------------------------------------------ seçim, hücre düzenleme
+    def secili_satirlar(self):
+        sat = sorted({i.row() for i in self.tablo.selectionModel().selectedRows()})
+        return [self.model.rows[r] for r in sat if r < len(self.model.rows)]
+
+    def sel_ids(self):
+        return [i for i, _ in self.secili_satirlar()]
+
+    def sec(self):
+        x = self.sel_ids()
+        if not x:
+            self.bilgi("Uyarı", "Önce bir satır seçin.")
+            return None
+        if len(x) > 1:
+            self.bilgi("Uyarı", "Bu işlem için tek bir satır seçin.")
+            return None
+        return x[0]
+
+    def _basildi(self, index):
+        self.edit_kapat()
+        if index.isValid():
+            self.son = (self.model.rows[index.row()][0], ek.TV_COLS[index.column()])
+
+    def sag(self, poz):
+        index = self.tablo.indexAt(poz)
+        if not index.isValid():
+            return
+        self.son = (self.model.rows[index.row()][0], ek.TV_COLS[index.column()])
+        if not self.tablo.selectionModel().isRowSelected(index.row(), QtCore.QModelIndex()):
+            self.tablo.selectRow(index.row())
+        self.menu.exec(self.tablo.viewport().mapToGlobal(poz))
+
+    def cift(self, index):
+        if not index.isValid():
+            return
+        iid, k = self.model.rows[index.row()][0], ek.TV_COLS[index.column()]
+        self.son = (iid, k)
+        self.tablo.selectRow(index.row())
+        if k in ("karar_no", "karar_ok"):
+            self.ac("karar")
+        elif k in ("makbuz_no", "makbuz_ok"):
+            self.ac("makbuz")
+        else:
+            QtCore.QTimer.singleShot(50, lambda: self.hucre(iid, k))
+
+    def f2(self):
+        if self.son and self.model.satir_bul(self.son[0]) >= 0:
+            self.hucre(*self.son)
+        else:
+            self.bilgi("Uyarı", "Önce bir hücreye tıklayın.")
+
+    def edit_kapat(self):
+        w = self.delegate.aktif if hasattr(self, "delegate") else None
+        if w is not None:
+            self.delegate.aktif = None
+            try:
+                self.delegate.closeEditor.emit(w, QtWidgets.QAbstractItemDelegate.EndEditHint.RevertModelCache)
+            except RuntimeError:
+                pass
+
+    def hucre(self, iid, k):
+        self.edit_kapat()
+        if k in DUZENLENEMEZ:
+            return
+        r = self.model.satir_bul(iid)
+        if r < 0:
+            return
+        index = self.model.index(r, KOLON_NO[k])
+        self.tablo.setCurrentIndex(index)
+        self.tablo.edit(index)
+
+    def kaydet(self, iid, k, v):
+        iid = int(iid)
+        v = (ek.para_bicim(v) if k == "alinan_ucret" else
+             (ek.tarih_bicim(v) if k in ek.DATES else (ek.islem_kanon(v) if k == "islem" else v.strip())))
+        if (ek.q(f"SELECT {k} FROM kayit WHERE id=?", (iid,))[0][0] or "") == v:  # değişmediyse dokunma
+            return
+        self.undo_onceki("Hücre düzenleme: " + ek.LAB.get(k, k), [iid])
+        if k == "onay":
+            eski = ek.q("SELECT onay FROM kayit WHERE id=?", (iid,))[0][0] or ""
+            if eski != v:
+                ek.q("UPDATE kayit SET durum_tarihi=? WHERE id=?", (ek.bugun_str(), iid))
+        ek.q(f"UPDATE kayit SET {k}=? WHERE id=?", (v, iid))
+        r = self.model.satir_bul(iid)
+        if r >= 0:
+            d = self.model.rows[r][1]
+            d[k] = v
+            if k in ("karar_no", "makbuz_no"):
+                tur = k[:-3]
+                x = ek.q(f"SELECT {tur}_no,{tur}_dosya FROM kayit WHERE id=?", (iid,))[0]
+                d[tur + "_ok"] = ek.dosya_isaret(tur, {tur + "_no": x[0] or "", tur + "_dosya": x[1] or ""},
+                                                 ek.dosya_indeksi(ek.ayar(tur + "_klasor")))
+            self.model.dataChanged.emit(self.model.index(r, 0), self.model.index(r, len(ek.TV_COLS) - 1))
+        t = ek.LISTE_ALAN.get(k)
+        if t and v:
+            ek.q("INSERT OR IGNORE INTO liste VALUES (?,?)", (t, v))
+            self.fil_yenile()
+        self.durum_guncelle()
+        if k == "onay":
+            self.yenile_koru(iid)
+        else:
+            self.kart_guncelle(self.tum_kayitlar())
+            self.detay_guncelle()
+
+    def kopyala(self):
+        sec = self.secili_satirlar()
+        if not sec:
+            return
+        if len(sec) == 1 and self.son and self.son[0] == sec[0][0]:
+            k = self.son[1]
+            d = sec[0][1]
+            metin = d.get(k)
+            if metin is None:
+                metin = str(self.model.data(self.model.index(self.model.satir_bul(sec[0][0]), KOLON_NO[k])) or "")
+            metin = str(metin)
+        else:  # birden çok satır: Excel'e yapıştırılabilir (sekmeyle ayrılmış)
+            metin = "\n".join("\t".join(d[k] for k in ek.SHOWN) for _, d in sec)
+        QtWidgets.QApplication.clipboard().setText(metin)
+
+    # ------------------------------------------------ satır işlemleri
+    def sil(self):
+        ids = self.sel_ids()
+        if not ids:
+            self.bilgi("Uyarı", "Önce silinecek satır(lar)ı seçin.")
+            return
+        msg = ("Kayıt silinsin mi?" if len(ids) == 1 else f"{len(ids)} kayıt silinsin mi?") + \
+            "\n\n(Veri > Son silinenler bölümünden 90 gün içinde geri getirebilirsiniz.)"
+        if self.sor("Sil", msg):
+            snap = ek.kayit_snapshot(ids)
+            zaman = ek.kayit_sil(ids)
+            self.undo_push(f"Silme ({len(ids)} kayıt)", snap, zaman)
+            self.load()
+
+    def parsel_onay_kaldir(self, ids):
+        n = 0
+        for i in ids:
+            if (self.pk.get(i) or {}).get("onay"):
+                ek.q("UPDATE parsel_kontrol SET onay_bekliyor=0 WHERE work_id=?", (i,))
+                n += 1
+        self.load()
+        return n
+
+    def parsel_onayla(self):
+        """Pasif parsel uyarısını kaldırır (işin durumuna dokunmaz)."""
+        ids = self.sel_ids()
+        if not ids:
+            self.bilgi("Uyarı", "Önce satır(lar)ı seçin.")
+            return
+        n = self.parsel_onay_kaldir(ids)
+        self.bildir(f"{n} kayıt için parsel uyarısı kaldırıldı" if n else "Seçili kayıtlarda onay bekleyen parsel uyarısı yok")
+
+    def ok_yenile(self, iid, tur):
+        r = self.model.satir_bul(iid)
+        if r >= 0:
+            x = ek.q(f"SELECT {tur}_no,{tur}_dosya FROM kayit WHERE id=?", (iid,))[0]
+            self.model.rows[r][1][tur + "_ok"] = ek.dosya_isaret(
+                tur, {tur + "_no": x[0] or "", tur + "_dosya": x[1] or ""}, ek.dosya_indeksi(ek.ayar(tur + "_klasor")))
+            self.model.dataChanged.emit(self.model.index(r, 0), self.model.index(r, len(ek.TV_COLS) - 1))
+
+    def dosya_sec_dialog(self, tur):
+        """Karar ve makbuz için ayrı ayrı son seçilen klasörü hatırlar. Dosyayı yüklemez, yolunu döndürür."""
+        ad = "Karar" if tur == "karar" else "Makbuz (dekont)"
+        baslangic = ""
+        for k in (f"son_{tur}_klasoru", f"{tur}_klasor"):
+            d = ek.ayar(k)
+            if d and os.path.isdir(d):
+                baslangic = d
+                break
+        p, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, f"{ad} dosyasını seçin (PDF veya resim)", baslangic,
+            "PDF ve resimler (*.pdf *.jpg *.jpeg *.png *.tif *.tiff);;Tüm dosyalar (*.*)")
+        if not p:
+            return ""
+        p = os.path.normpath(p)
+        ayar_yaz(f"son_{tur}_klasoru", os.path.dirname(p))
+        return p
+
+    def dosya_sec(self, tur, i=None):
+        """Dosyayı yüklemez; yalnızca seçilen dosyanın yolunu kayda işler."""
+        i = i or self.sec()
+        if not i:
+            return None
+        p = self.dosya_sec_dialog(tur)
+        if not p:
+            return None
+        self.undo_onceki("Dosya yolu seçimi", [i])
+        ek.q(f"UPDATE kayit SET {tur}_dosya=? WHERE id=?", (p, i))
+        ek.dosya_cache_temizle()
+        self.ok_yenile(i, tur)
+        return p
+
+    def ac(self, tur):
+        i = self.sec()
+        if not i:
+            return
+        ad = "Karar" if tur == "karar" else "Makbuz"
+        no, dosya = ek.q(f"SELECT {tur}_no,{tur}_dosya FROM kayit WHERE id=?", (i,))[0]
+        no, dosya = no or "", dosya or ""
+        p = dosya if dosya and os.path.exists(dosya) else ek.find_file(ek.ayar(tur + "_klasor"), no)
+        if p:
+            ek.open_file(p)
+            return
+        if dosya:
+            mesaj = f"Kayıtlı dosya bulunamadı (taşınmış, silinmiş veya ağa ulaşılamıyor olabilir):\n{dosya}\n\nYeni dosya seçmek ister misiniz?"
+        else:
+            mesaj = (f"Bu kayıt için {ad.lower()} dosyası tanımlı değil.\n\nŞimdi bir dosya seçmek ister misiniz? "
+                     "(Dosya yüklenmez, sadece yolu kaydedilir.)")
+        if self.sor(f"{ad} dosyası", mesaj):
+            yeni = self.dosya_sec(tur, i)
+            if yeni:
+                ek.open_file(yeni)
+
+    def klasorler(self):
+        for tur, ad in [("karar", "Karar dosyalarının klasörü"), ("makbuz", "Makbuz dosyalarının klasörü")]:
+            self.bilgi("Klasör (isteğe bağlı)", ad + " seçilecek.\nBu ayar yalnızca dosya yolu elle seçilmemiş kayıtlar için, "
+                       "dosya adı karar/makbuz numarasıyla (ör. 599.pdf) eşleşirse kullanılır.")
+            p = QtWidgets.QFileDialog.getExistingDirectory(self, ad)
+            if p:
+                ayar_yaz(tur + "_klasor", p)
+        ek.dosya_cache_temizle()
+        self.load()
+
+    # ------------------------------------------------ rapor, CSV
+    def gorunen(self):
+        tum = dict(self.tum_kayitlar())
+        return [tum[i] for i, _ in self.model.rows if i in tum]
+
+    def filtre_ozeti(self):
+        p = ["Görünüm: " + self.gorunum.currentText()]
+        for k, ad in ListeFiltreleri.ALANLAR:
+            if self.lf.aktif(k):
+                p.append(f"{ad}: {self.lf.cb[k].currentText()}")
+        b, e = self.ta.bas, self.ta.bit
+        if b or e:
+            p.append(f"{self.ta.alan.currentText()}: {b or '...'} - {e or '...'}")
+        if self.ara.text().strip():
+            p.append(f"Arama: {self.ara.text().strip()}")
+        if self.eksik.isChecked():
+            p.append("Dosyası eksik olanlar")
+        if self.gecik.isChecked():
+            p.append(f"Geciken işler (>{self.esik()} gün)")
+        return " | ".join(p) + "   —   Düzenlenme: " + datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+
+    def rapor_liste(self):
+        sat = self.gorunen()
+        if not sat:
+            self.bilgi("Rapor", "Listede kayıt yok.")
+            return
+        ek.rapor_ac(ek.rapor_sayfasi("İmar Uygulamaları - Kayıt Listesi", self.filtre_ozeti(), ek.liste_html(sat)))
+
+    def rapor_muellif(self):
+        sat = self.gorunen()
+        if not sat:
+            self.bilgi("Rapor", "Listede kayıt yok.")
+            return
+        ek.rapor_ac(ek.rapor_sayfasi("Müellife Göre Harç Dökümü", self.filtre_ozeti(), ek.muellif_html(sat)))
+
+    def excel_aktar(self):
+        sat = self.gorunen()
+        if not sat:
+            self.bilgi("Rapor", "Listede kayıt yok.")
+            return
+        p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Excel'e aktar", "", "Excel'de açılır (CSV) (*.csv)")
+        if p:
+            if not p.lower().endswith(".csv"):
+                p += ".csv"
+            with open(p, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f, delimiter=";")
+                w.writerow(["Sıra"] + [ek.LAB[k] for k in ek.SHOWN] + [ek.LAB["bekleme"], ek.LAB["parsel_durum"], ek.LAB["parsel_yeni"]])
+                for n, d in enumerate(sat, 1):
+                    w.writerow([n] + [d[k] for k in ek.SHOWN] + [d["bekleme"], d["parsel_durum"], d["parsel_yeni"]])
+            self.bilgi("Tamam", f"{len(sat)} kayıt aktarıldı:\n{p}")
+
+    def csv_aktar(self):
+        p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "CSV Aktar", "", "CSV (*.csv)")
+        if p:
+            if not p.lower().endswith(".csv"):
+                p += ".csv"
+            with open(p, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f, delimiter=";")
+                w.writerow([ek.LAB[k] for k in ek.KEYS])
+                w.writerows(ek.q(f"SELECT {','.join(ek.KEYS)} FROM kayit ORDER BY id"))
+
+    def csv_al(self):
+        p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "CSV Al", "", "CSV (*.csv)")
+        if not p:
+            return
+        with open(p, encoding="utf-8-sig", newline="") as f:
+            rows = list(csv.reader(f))
+        idx = {}
+        for i, h in enumerate(rows[0] if rows else []):
+            k = ek.HDR.get(ek.tr_lower(ek.temiz(h)))
+            if k and k not in idx:
+                idx[k] = i
+        if "mahalle" not in idx:
+            self.hata("Hata", "Başlık satırı bulunamadı (MAHALLE sütunu yok).")
+            return
+        if ek.q("SELECT 1 FROM kayit LIMIT 1") and self.sor(
+                "CSV Al", "Mevcut kayıtlar silinip dosyadaki kayıtlar yeniden yüklensin mi?\n(Hayır: mevcut kayıtlara eklenir)"):
+            ek.kayit_sil([r[0] for r in ek.q("SELECT id FROM kayit")])
+        n = 0
+        for r in rows[1:]:
+            d = {k: (ek.temiz(r[i]) if i < len(r) else "") for k, i in idx.items()}
+            if d.get("alinan_ucret"):
+                d["alinan_ucret"] = ek.para_bicim(d["alinan_ucret"])
+            for dk in ek.DATES:
+                if d.get(dk):
+                    d[dk] = ek.tarih_bicim(d[dk])
+            if not any(d.values()):
+                continue
+            ek.q(f"INSERT INTO kayit ({','.join(d)}) VALUES ({','.join('?' * len(d))})", list(d.values()))
+            for tur in ek.LT:
+                if d.get(tur):
+                    ek.q("INSERT OR IGNORE INTO liste VALUES (?,?)", (tur, d[tur]))
+            n += 1
+        g = ek.benzer_gruplar("islem", "islem", True)
+        if g:
+            ek.benzer_uygula("islem", "islem", g)
+        self.undo_temizle()
+        self.load()
+        self.bilgi("Tamam", f"{n} kayıt aktarıldı." + (f"\n{len(g)} yinelenen işlem adı birleştirildi." if g else ""))
+
+    # ------------------------------------------------ yedek
+    def acilis(self):
+        self.acilis_yedek()
+        if not ek.ayar("ucret_bicim_v1"):  # eski kayıtlardaki ücretleri bir kez tek biçime çevir
+            n = 0
+            for i, u in ek.q("SELECT id, alinan_ucret FROM kayit"):
+                yeni = ek.para_bicim(u or "")
+                if yeni != (u or ""):
+                    ek.q("UPDATE kayit SET alinan_ucret=? WHERE id=?", (yeni, i))
+                    n += 1
+            ayar_yaz("ucret_bicim_v1", "1")
+            if n:
+                self.load()
+                self.bilgi("Ücret biçimi", f"{n} kaydın alınan ücreti tek biçime (9.500,00 ₺) çevrildi.")
+        if not ek.ayar("tarih_bicim_v1"):  # eski kayıtlardaki tarihleri bir kez tek biçime çevir
+            n = bozuk = 0
+            sut = list(ek.DATES) + ["durum_tarihi"]
+            for r in ek.q(f"SELECT id,{','.join(sut)} FROM kayit"):
+                eski = [x or "" for x in r[1:]]
+                yeni = [ek.tarih_bicim(x) for x in eski]
+                bozuk += sum(1 for x in yeni if x and not ek.tarih_oku(x))
+                if yeni != eski:
+                    ek.q(f"UPDATE kayit SET {','.join(k + '=?' for k in sut)} WHERE id=?", yeni + [r[0]])
+                    n += 1
+            ayar_yaz("tarih_bicim_v1", "1")
+            if n or bozuk:
+                self.load()
+                msg = f"{n} kaydın tarihleri tek biçime (13.10.2026) çevrildi."
+                if bozuk:
+                    msg += f"\n\n{bozuk} tarih anlaşılamadığı için olduğu gibi bırakıldı; tabloda gözle kontrol etmenizi öneririm."
+                self.bilgi("Tarih biçimi", msg)
+        if not ek.ayar("islem_birlestir_v1"):  # yinelenen işlem adlarını bir kez birleştir
+            g = ek.benzer_gruplar("islem", "islem", True)
+            ayar_yaz("islem_birlestir_v1", "1")
+            if g:
+                ek.benzer_uygula("islem", "islem", g)
+                self.load()
+                self.bilgi("İşlem adları", "Yinelenen işlem adları birleştirildi, kayıtlar güncellendi:\n\n" + ek.benzer_ozet(g))
+
+    def acilis_yedek(self):
+        kl = ek.yedek_klasor()
+        bugun = os.path.join(kl, f"imar_kayitlari_{datetime.date.today():%Y-%m-%d}.db")
+        if not os.path.exists(bugun):
+            try:
+                ek.yedekle()
+            except Exception as ex:
+                self.uyari("Yedek alınamadı", f"Otomatik yedek alınamadı:\n{ex}\n\nYedek klasörünü Yedek menüsünden değiştirebilirsiniz.")
+
+    def yedek_simdi(self):
+        try:
+            self.bilgi("Yedek", "Yedek alındı:\n" + ek.yedekle())
+        except Exception as ex:
+            self.hata("Hata", f"Yedek alınamadı:\n{ex}")
+
+    def yedek_klasoru_sec(self):
+        p = QtWidgets.QFileDialog.getExistingDirectory(self, "Yedek klasörü (örn. ağdaki bir klasör)", ek.yedek_klasor())
+        if p:
+            ayar_yaz("yedek_klasor", p)
+            self.bilgi("Yedek", "Yedek klasörü ayarlandı:\n" + p)
+
+    def yedek_geri_yukle(self):
+        kl = ek.yedek_klasor()
+        p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Geri yüklenecek yedeği seçin", kl if os.path.isdir(kl) else ek.BASE,
+                                                     "Veritabanı (*.db)")
+        if not p:
+            return
+        try:
+            c = sqlite3.connect(p)
+            try:
+                c.execute("SELECT COUNT(*) FROM kayit").fetchone()
+            finally:
+                c.close()
+        except Exception:
+            self.hata("Hata", "Seçilen dosya geçerli bir kayıt yedeği değil.")
+            return
+        if not self.sor("Geri yükle", "Şu anki kayıtların yerine seçtiğiniz yedek yüklenecek.\n"
+                        "(Mevcut hâliniz önce ayrı bir dosya olarak saklanır.) Devam edilsin mi?"):
+            return
+        try:
+            ek.yedekle("geri_yukleme_oncesi_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+            ek.db_kopyala(p, ek.DB)
+            ek.init_db()
+            self.undo_temizle()
+            self.load()
+            self.bilgi("Tamam", "Yedek geri yüklendi.")
+        except Exception as ex:
+            self.hata("Hata", f"Geri yükleme başarısız:\n{ex}")
+
+    # ------------------------------------------------ TKGM (Parsel Sorgu) köprüsü
+    def parsel_sorgu_ac(self):
+        """İş Takip'teki AÇIK işleri parsel sorgu penceresine aktarır; sonuçlar 'parsel_kontrol' tablosuna yazılır.
+        Parsel Sorgu penceresi (hâlâ Tkinter) ayrı bir süreçte açılır (parsel_baslat.py)."""
+        for modul in ("parsel_sorgu_modulu", "requests", "openpyxl"):
+            if importlib.util.find_spec(modul) is None:
+                self.hata("Parsel Sorgu", "Parsel Sorgu modülü yüklenemedi.\n\nparsel_sorgu_modulu.py bu programla aynı klasörde "
+                          "olmalı ve 'pip install requests openpyxl' ile kütüphaneler kurulu olmalı.\n\nAyrıntı: “" + modul + "” bulunamadı.")
+                return
+        p = self._parsel_proc
+        if p is not None and p.poll() is None:
+            self.bildir("Parsel Sorgu penceresi zaten açık (görev çubuğuna bakın)", 5000)
+            return
+        # Hafif sorgu: tum_kayitlar() kullanılmaz (ağ klasörlerindeki dosyaları taramaz, bu yüzden pencere donmaz)
+        kaynak = [(i, mh, ap) for i, mh, ap, onay in ek.q("SELECT id, mahalle, ada_parsel, onay FROM kayit")
+                  if not ek.arsiv_mi(onay) and (mh or "").strip() and (ap or "").strip()]
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+                json.dump(kaynak, f, ensure_ascii=False)
+                kaynak_yolu = f.name
+            self._parsel_log = os.path.join(tempfile.gettempdir(), "parsel_baslat.log")
+            log = open(self._parsel_log, "w", encoding="utf-8")
+            if getattr(sys, "frozen", False):
+                komut = [sys.executable, "--parsel-baslat", kaynak_yolu, ek.DB]
+            else:
+                komut = [sys.executable, os.path.abspath(__file__), "--parsel-baslat", kaynak_yolu, ek.DB]
+            try:
+                self._parsel_proc = subprocess.Popen(komut, cwd=ek.BASE, stdout=log, stderr=log)
+            finally:
+                log.close()
+        except Exception as ex:
+            self.hata("Parsel Sorgu", f"Parsel Sorgu penceresi başlatılamadı:\n{ex}")
+            return
+        self._parsel_imza = self._parsel_imza_al()
+        self._parsel_zaman.start()
+        self.bildir("Parsel Sorgu açılıyor...", 3000)
+
+    def _parsel_imza_al(self):
+        try:
+            return ek.q("SELECT COUNT(*), COALESCE(MAX(son_kontrol),''), COALESCE(SUM(onay_bekliyor),0) FROM parsel_kontrol")[0]
+        except sqlite3.Error:
+            return None
+
+    def _parsel_izle(self):
+        """Parsel Sorgu sonuç yazdıkça tabloyu yeniler (eski 'sonuc_geri_cagir' karşılığı)."""
+        imza = self._parsel_imza_al()
+        if imza != self._parsel_imza:
+            self._parsel_imza = imza
+            self.load_gecikmeli(700)  # birçok sonuç art arda gelir: tabloyu tek seferde yenile
+        p = self._parsel_proc
+        if p is not None and p.poll() is not None:
+            self._parsel_zaman.stop()
+            self.load_gecikmeli(300)
+            if p.returncode != 0:
+                ayr = ""
+                try:
+                    with open(self._parsel_log, encoding="utf-8", errors="replace") as f:
+                        ayr = f.read()[-1500:]
+                except OSError:
+                    pass
+                self.uyari("Parsel Sorgu", "Parsel Sorgu penceresi beklenmedik şekilde kapandı veya açılamadı.\n\n"
+                           f"Ayrıntı ({self._parsel_log}):\n{ayr}")
+            self._parsel_proc = None
+
+
+def main():
+    ek.init_db()
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle("Fusion")
+    app.setFont(QtGui.QFont("Segoe UI", 10))
+    pencere = AnaPencere()
+    if pencere._buyut:
+        pencere.showMaximized()
+    else:
+        pencere.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
