@@ -11,8 +11,13 @@ Günlük istek sayacı vardır; üst sınıra gelince toplu sorgu durur. İl/il�
 import os, sys, re, json, time, sqlite3, threading, unicodedata
 from pathlib import Path
 from datetime import datetime, date, timedelta
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import math
+from PySide6.QtCore import (Qt, QThread, Signal, QAbstractTableModel, QModelIndex, QStringListModel, QRectF, QPointF, QTimer)
+from PySide6.QtGui import QColor, QBrush, QPainter, QPen, QFont, QPolygonF, QGuiApplication, QPalette
+from PySide6.QtWidgets import (QApplication, QMainWindow, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+                               QPushButton, QCheckBox, QComboBox, QLineEdit, QGroupBox, QTableView, QTableWidget,
+                               QTableWidgetItem, QHeaderView, QProgressBar, QSpinBox, QTabWidget, QPlainTextEdit,
+                               QScrollArea, QMessageBox, QFileDialog, QAbstractItemView, QCompleter, QSizePolicy)
 
 import requests
 from openpyxl import Workbook, load_workbook
@@ -837,35 +842,253 @@ PALET_KOYU = {
 }
 
 
-def koyu_mu(widget, stil=None):
-    """Pencerenin kullandığı ttk teması koyu mu? (İş Takip koyu moddayken bu pencere de koyu açılır.)"""
+
+# ------------------------------------------------------------------ PySide6 arayüzü
+# Yukarıdaki motor/veritabanı/İş Takip işlevleri DEĞİŞTİRİLMEDİ; aşağısı yalnızca arayüz katmanıdır.
+_ARKA_PLAN = set()         # çalışan QThread nesneleri (kapanışta yok edilmesinler)
+_ACIK_PENCERELER = set()   # dışarıdan (ör. Tk tabanlı İş Takip) açılıp referansı bırakılan pencereler
+
+
+def qapp_hazirla():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
+    return app
+
+
+def _tk_koprusu(master):
+    """Geçiş dönemi: pencere hâlâ Tkinter tabanlı İş Takip'ten açılırsa Qt olaylarını Tk döngüsünden işler."""
+    if getattr(master, "_qt_pompa", False):
+        return
+    master._qt_pompa = True
+    qapp = QApplication.instance()
+
+    def pompa():
+        try:
+            qapp.processEvents()
+            master.after(15, pompa)
+        except Exception:
+            pass
+    master.after(15, pompa)
+
+
+def koyu_mu(widget=None):
+    """Uygulama paleti koyu mu? (koyu modda pencere koyu paletle açılır.)"""
     try:
-        stil = stil or ttk.Style(widget)
-        renk = stil.lookup("TFrame", "background") or stil.lookup("Treeview", "fieldbackground") or "#ffffff"
-        r, g, b = widget.winfo_rgb(renk)
-        return (0.299 * r + 0.587 * g + 0.114 * b) / 65535 < 0.45
+        pal = widget.palette() if widget is not None else QGuiApplication.palette()
+        return pal.color(QPalette.ColorRole.Window).lightness() < 115
     except Exception:
         return False
 
 
-class Detay(tk.Toplevel):
+def _kutu(parent, ikon, baslik, metin, sorulu=False):
+    kutu = QMessageBox(ikon, baslik, metin, QMessageBox.StandardButton.NoButton, parent)
+    if sorulu:
+        evet = kutu.addButton("Evet", QMessageBox.ButtonRole.YesRole)
+        kutu.addButton("Hayır", QMessageBox.ButtonRole.NoRole)
+        kutu.exec()
+        return kutu.clickedButton() is evet
+    kutu.addButton("Tamam", QMessageBox.ButtonRole.AcceptRole)
+    kutu.exec()
+    return True
+
+
+def bilgi(parent, baslik, metin):
+    _kutu(parent, QMessageBox.Icon.Information, baslik, metin)
+
+
+def uyari(parent, baslik, metin):
+    _kutu(parent, QMessageBox.Icon.Warning, baslik, metin)
+
+
+def hata_kutusu(parent, baslik, metin):
+    _kutu(parent, QMessageBox.Icon.Critical, baslik, metin)
+
+
+def sor(parent, baslik, metin):
+    return _kutu(parent, QMessageBox.Icon.Question, baslik, metin, sorulu=True)
+
+
+class _Is(QThread):
+    """Verilen işlevi arka planda çalıştırır; widget'lara yalnız sinyallerle dokunulur."""
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+        _ARKA_PLAN.add(self)
+        self.finished.connect(lambda: _ARKA_PLAN.discard(self))
+
+    def run(self):
+        self.fn()
+
+
+class Metin(QLineEdit):
+    def get(self):
+        return self.text()
+
+    def set(self, v):
+        self.setText(str(v))
+
+
+class AramaliKutu(QComboBox):
+    """Yazdıkça Türkçe harf duyarsız öneri listesi gösteren il/ilçe/mahalle kutusu."""
+    secildi = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._tam = []
+        self._model = QStringListModel(self)
+        self._comp = QCompleter(self._model, self)
+        self._comp.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        self.setCompleter(self._comp)
+        self.lineEdit().textEdited.connect(self._yazildi)
+        self.activated.connect(lambda _i: self.secildi.emit())
+        self._comp.activated[str].connect(self._oneriden)
+
+    def get(self):
+        return self.currentText()
+
+    def set(self, v):
+        self.setEditText(str(v))
+
+    def listeyi_ata(self, liste):
+        """Seçenekleri değiştirir; yazılı metni ve ayar kaydını etkilemez."""
+        metin = self.currentText()
+        le = self.lineEdit()
+        self.blockSignals(True)
+        le.blockSignals(True)
+        self.clear()
+        self.addItems(list(liste))
+        self.setEditText(metin)
+        le.blockSignals(False)
+        self.blockSignals(False)
+        self._tam = list(liste)
+
+    def _yazildi(self, yazilan):
+        aranan = norm_ad(yazilan)
+        eslesen = [ad for ad in self._tam if aranan in norm_ad(ad)] if aranan else []
+        self._model.setStringList(eslesen[:8])
+        if yazilan and eslesen:
+            self._comp.complete()
+        else:
+            self._comp.popup().hide()
+
+    def _oneriden(self, metin):
+        self.setEditText(metin)
+        self.secildi.emit()
+
+
+class ParselModel(QAbstractTableModel):
+    BASLIK = ["İl", "İlçe", "Mahalle", "Ada", "Parsel", "İş kayıt no", "Parsel durumu", "Alan (m²)", "Nitelik",
+              "Yeni parseller", "Pasif işlemi", "Son kontrol"]
+    GENISLIK = [80, 120, 110, 60, 60, 90, 100, 90, 120, 190, 170, 120]
+
+    def __init__(self, pal):
+        super().__init__()
+        self.pal = pal
+        self.satirlar = []   # (rows içindeki indeks, durum, [hücre değerleri])
+
+    def yukle(self, satirlar):
+        self.beginResetModel()
+        self.satirlar = satirlar
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.satirlar)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.BASLIK)
+
+    def headerData(self, bolum, yon, rol=Qt.ItemDataRole.DisplayRole):
+        if rol == Qt.ItemDataRole.DisplayRole and yon == Qt.Orientation.Horizontal:
+            return self.BASLIK[bolum]
+        return None
+
+    def data(self, index, rol=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        i, durum, deger = self.satirlar[index.row()]
+        if rol == Qt.ItemDataRole.DisplayRole:
+            return str(deger[index.column()])
+        if rol == Qt.ItemDataRole.UserRole:
+            return i
+        renk = self.pal["satir"].get(durum)
+        if renk and rol == Qt.ItemDataRole.BackgroundRole:
+            return QBrush(QColor(renk[0]))
+        if renk and rol == Qt.ItemDataRole.ForegroundRole:
+            return QBrush(QColor(renk[1]))
+        return None
+
+
+class DurumEtiketi(QLabel):
+    def __init__(self, metin=""):
+        super().__init__(metin)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def set(self, metin):
+        self.setText(str(metin))
+        self.setToolTip(str(metin))
+
+
+def _tablo_yap(basliklar, genislikler, satirlar, soluk=None):
+    """Salt okunur küçük tablo. satirlar: [(değerler, soluk_mu)]."""
+    t = QTableWidget(len(satirlar), len(basliklar))
+    t.setHorizontalHeaderLabels(basliklar)
+    t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    t.verticalHeader().setVisible(False)
+    t.horizontalHeader().setStretchLastSection(True)
+    for j, w in enumerate(genislikler):
+        t.setColumnWidth(j, w)
+    for i, (degerler, soluk_mu) in enumerate(satirlar):
+        for j, d in enumerate(degerler):
+            oge = QTableWidgetItem("" if d is None else str(d))
+            if soluk_mu and soluk:
+                oge.setForeground(QBrush(QColor(soluk)))
+            t.setItem(i, j, oge)
+    return t
+
+
+class GrafikAlani(QWidget):
+    def __init__(self, detay):
+        super().__init__()
+        self.d = detay
+        self.setMinimumSize(700, 480)
+
+    def paintEvent(self, _olay):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), QColor(self.d.pal["cv_bg"]))
+        self.d.grafik_ciz(p, max(self.width(), 700))
+        p.end()
+
+
+class Detay(QDialog):
     """Parsel Sorgu'daki 'hareket listesi' penceresi gibi: Özet / Tablo / Grafik / Ham veri."""
 
     def __init__(self, master, row, ilgili=None):
-        super().__init__(master)
+        super().__init__(master if isinstance(master, QWidget) else None)
         self.row = row
         self.pal = getattr(master, "pal", PALET_ACIK)
         self.ilgili = list(ilgili or [])  # aynı iş kaydında yazılı diğer parseller (sorgulanmamış)
         self.tahmin = self.birlesen_tahmin()
-        self.title(f"{row['ada']} ada {row['parsel']} parsel hareket listesi")
-        self.geometry("900x560")
-        tk.Label(self, text=f"{row['ada']} ada {row['parsel']} parsel hareket listesi", bg=self.pal["ust_bant"], fg="white",
-                 font=("Segoe UI", 15), anchor="w", padx=16, pady=12).pack(fill="x")
-        nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True)
-        self.ozet_tab, self.tablo_tab, self.grafik_tab, self.ham_tab, self.devam_tab = (ttk.Frame(nb) for _ in range(5))
-        for f, ad in ((self.ozet_tab, "Özet"), (self.tablo_tab, "Hareket Tablosu"), (self.grafik_tab, "Grafik"), (self.devam_tab, "Hareket Zinciri"), (self.ham_tab, "Ham veri")):
-            nb.add(f, text=ad)
+        self.setWindowTitle(f"{row['ada']} ada {row['parsel']} parsel hareket listesi")
+        self.resize(900, 560)
+        ana = QVBoxLayout(self)
+        ana.setContentsMargins(0, 0, 0, 0)
+        ana.setSpacing(0)
+        baslik = QLabel(f"{row['ada']} ada {row['parsel']} parsel hareket listesi")
+        baslik.setStyleSheet(f"background:{self.pal['ust_bant']};color:white;font:15pt 'Segoe UI';padding:12px 16px;")
+        ana.addWidget(baslik)
+        self.nb = QTabWidget()
+        ana.addWidget(self.nb, 1)
+        self.ozet_tab, self.tablo_tab, self.grafik_tab, self.ham_tab, self.devam_tab = (QWidget() for _ in range(5))
+        for f, ad in ((self.ozet_tab, "Özet"), (self.tablo_tab, "Hareket Tablosu"), (self.grafik_tab, "Grafik"),
+                      (self.devam_tab, "Hareket Zinciri"), (self.ham_tab, "Ham veri")):
+            self.nb.addTab(f, ad)
         self.satirlar = []
         self.devamlar = []
         try:
@@ -904,8 +1127,13 @@ class Detay(tk.Toplevel):
             metin = "Aktif/pasif durumu belirlenemedi.\n" + (r.get("detail") or "")
         else:
             metin = r.get("detail") or durum
-        tk.Label(self.ozet_tab, text=metin, bg=renk, fg=yazi, wraplength=720, justify="center", padx=16, pady=18,
-                 relief="solid", bd=1).pack(fill="x", padx=18, pady=(18, 10))
+        ly = QVBoxLayout(self.ozet_tab)
+        ly.setContentsMargins(18, 18, 18, 12)
+        mesaj = QLabel(metin)
+        mesaj.setWordWrap(True)
+        mesaj.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mesaj.setStyleSheet(f"background:{renk};color:{yazi};border:1px solid #888;padding:18px 16px;")
+        ly.addWidget(mesaj)
         satirlar = [("Parsel", f"{r['mahalle']} / {r['ada']} ada {r['parsel']} parsel"),
                     ("Alan (m²)", r.get("alan") or "-"), ("Nitelik", r.get("nitelik") or "-")]
         if durum == "Pasif":
@@ -916,13 +1144,24 @@ class Detay(tk.Toplevel):
             son_aktif = self.son_aktif_parseller()
             satirlar.append((f"Zincir sonundaki aktif parseller ({len(son_aktif)} adet)",
                              ",  ".join(son_aktif) if son_aktif else "Belirlenemedi"))
-        for k, v in satirlar:
-            f = ttk.Frame(self.ozet_tab)
-            f.pack(fill="x", padx=24, pady=3)
-            ttk.Label(f, text=k + ":", width=30, font=("Segoe UI", 10, "bold")).pack(side="left")
-            ttk.Label(f, text=v, font=("Segoe UI", 10)).pack(side="left")
+        izgara = QGridLayout()
+        izgara.setContentsMargins(6, 8, 6, 0)
+        for i, (k, v) in enumerate(satirlar):
+            ak = QLabel(k + ":")
+            ak.setStyleSheet("font-weight:bold;")
+            av = QLabel(v)
+            av.setWordWrap(True)
+            av.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            izgara.addWidget(ak, i, 0, Qt.AlignmentFlag.AlignTop)
+            izgara.addWidget(av, i, 1)
+        izgara.setColumnStretch(1, 1)
+        izgara.setColumnMinimumWidth(0, 260)
+        ly.addLayout(izgara)
         if durum == "Pasif":
-            ttk.Label(self.ozet_tab, text="Not: Pasif parselin alan/niteliği son kayıtlı bilgidir.", foreground="#777").pack(anchor="w", padx=24, pady=(10, 0))
+            n = QLabel("Not: Pasif parselin alan/niteliği son kayıtlı bilgidir.")
+            n.setStyleSheet("color:#777;")
+            ly.addWidget(n)
+        ly.addStretch(1)
 
     def tum_hareket_satirlari(self):
         """Kök ve ara parsellerin hareketlerini birleştirir; aynı parselde en güncel durumu tutar."""
@@ -961,30 +1200,24 @@ class Detay(tk.Toplevel):
 
     def _tablo(self):
         hareketler = self.tum_hareket_satirlari()
-        t = ttk.Treeview(self.tablo_tab, columns=("aciklama", "durum", "no"), show="headings", height=10)
-        for c, ad, w in (("aciklama", "Açıklama / İşlem", 380), ("durum", "Son Durum", 90), ("no", "Taşınmaz No", 120)):
-            t.heading(c, text=ad)
-            t.column(c, width=w, anchor="w")
-        t.tag_configure("Pasif", foreground=self.pal["pasif_satir_fg"])
-        for satir in hareketler:
-            t.insert("", "end", values=(satir.get("aciklama") or "-", satir.get("durum"), satir.get("no")),
-                     tags=(satir.get("durum"),))
-        for no in self.tahmin:
-            t.insert("", "end", values=("İş kaydında yazılı; sorgulanmadı — tevhitle birleşmiş sayıldı", "Pasif*", no), tags=("Pasif",))
-        t.pack(fill="both", expand=True, padx=12, pady=12)
+        satirlar = [((s.get("aciklama") or "-", s.get("durum"), s.get("no")), s.get("durum") == "Pasif") for s in hareketler]
+        satirlar += [(("İş kaydında yazılı; sorgulanmadı — tevhitle birleşmiş sayıldı", "Pasif*", no), True) for no in self.tahmin]
+        ly = QVBoxLayout(self.tablo_tab)
+        ly.addWidget(_tablo_yap(["Açıklama / İşlem", "Son Durum", "Taşınmaz No"], [380, 90, 120], satirlar, self.pal["pasif_satir_fg"]))
         if not hareketler:
-            ttk.Label(self.tablo_tab, text="Hareket kaydı alınamadı.").pack()
+            ly.addWidget(QLabel("Hareket kaydı alınamadı."), 0, Qt.AlignmentFlag.AlignHCenter)
 
     def _grafik(self):
-        self.cv = tk.Canvas(self.grafik_tab, bg=self.pal["cv_bg"], highlightthickness=0)
-        self.cv.pack(fill="both", expand=True)
-        self.cv.bind("<Configure>", lambda e: self.grafik_ciz())
-        self.grafik_ciz()
+        ly = QVBoxLayout(self.grafik_tab)
+        ly.setContentsMargins(0, 0, 0, 0)
+        kaydirma = QScrollArea()
+        kaydirma.setWidgetResizable(True)
+        kaydirma.setWidget(GrafikAlani(self))
+        ly.addWidget(kaydirma)
 
-    def grafik_ciz(self):
-        cv, w = self.cv, max(self.cv.winfo_width(), 700)
-        cv.delete("all")
+    def grafik_ciz(self, p, w):
         kok = f"{self.row.get('ada')}/{self.row.get('parsel')}"
+        cizgi = QColor(self.pal["cv_cizgi"])
         dugum_durum = {kok: self.row.get("status") or "Belirsiz"}
         kenarlar = []
         kok_yeniler = [x.strip() for x in (self.row.get("yeni_parseller") or "").split(";") if x.strip()]
@@ -1004,7 +1237,9 @@ class Detay(tk.Toplevel):
                     kenarlar.append((no, yeni))
                     dugum_durum.setdefault(yeni, "Aktif")
         if not kenarlar:
-            cv.create_text(w / 2, 100, text="Parsel hareket zinciri bulunamadı", fill=self.pal["cv_cizgi"])
+            p.setPen(cizgi)
+            p.setFont(QFont("Segoe UI", 10))
+            p.drawText(QRectF(0, 88, w, 24), Qt.AlignmentFlag.AlignCenter, "Parsel hareket zinciri bulunamadı")
             return
 
         seviyeler = {kok: 0, **{n: 0 for n in self.tahmin}}
@@ -1024,14 +1259,24 @@ class Detay(tk.Toplevel):
         for seviye in range(max_seviye + 1):
             grup = [n for n, d in seviyeler.items() if d == seviye]
             for i, no in enumerate(grup):
-                x = w * (i + 1) / (len(grup) + 1)
-                y = 55 + seviye * y_adim
-                konum[no] = (x, y)
+                konum[no] = (w * (i + 1) / (len(grup) + 1), 55 + seviye * y_adim)
+        kalem = QPen(cizgi)
+        kalem.setWidth(2)
         for kaynak, hedef in kenarlar:
             if kaynak in konum and hedef in konum:
                 x1, y1 = konum[kaynak]
                 x2, y2 = konum[hedef]
-                cv.create_line(x1, y1 + 18, x2, y2 - 18, fill=self.pal["cv_cizgi"], width=2, arrow="last")
+                y1 += 18
+                y2 -= 18
+                p.setPen(kalem)
+                p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+                a = math.atan2(y2 - y1, x2 - x1)
+                ok = QPolygonF([QPointF(x2, y2),
+                                QPointF(x2 - 10 * math.cos(a - 0.4), y2 - 10 * math.sin(a - 0.4)),
+                                QPointF(x2 - 10 * math.cos(a + 0.4), y2 - 10 * math.sin(a + 0.4))])
+                p.setBrush(QBrush(cizgi))
+                p.drawPolygon(ok)
+        p.setFont(QFont("Segoe UI", 10))
         for no, (x, y) in konum.items():
             durum = dugum_durum.get(no, "Belirsiz")
             if durum == "Pasif":
@@ -1042,12 +1287,20 @@ class Detay(tk.Toplevel):
                 dolgu, yazi = self.pal["cv_aktif"]
             else:
                 dolgu, yazi = "#fff1bf", "#000000"
-            cv.create_rectangle(x - 48, y - 17, x + 48, y + 17, fill=dolgu, outline=self.pal["cv_cizgi"],
-                                dash=(4, 2) if durum == "Pasif*" else ())
-            cv.create_text(x, y, text=no + ("*" if durum == "Pasif*" else ""), fill=yazi, font=("Segoe UI", 10))
+            kutu_kalem = QPen(cizgi)
+            if durum == "Pasif*":
+                kutu_kalem.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(kutu_kalem)
+            p.setBrush(QBrush(QColor(dolgu)))
+            kutu = QRectF(x - 48, y - 17, 96, 34)
+            p.drawRect(kutu)
+            p.setPen(QColor(yazi))
+            p.drawText(kutu, Qt.AlignmentFlag.AlignCenter, no + ("*" if durum == "Pasif*" else ""))
         if self.tahmin:
-            cv.create_text(w / 2, 55 + max_seviye * y_adim + 48, fill=self.pal["cv_cizgi"], font=("Segoe UI", 9),
-                           text="* iş kaydında yazılı, sorgulanmadı; tevhitle birleşmiş sayıldı")
+            p.setPen(cizgi)
+            p.setFont(QFont("Segoe UI", 9))
+            p.drawText(QRectF(0, 55 + max_seviye * y_adim + 36, w, 24), Qt.AlignmentFlag.AlignCenter,
+                       "* iş kaydında yazılı, sorgulanmadı; tevhitle birleşmiş sayıldı")
 
     def _devam(self):
         """Zincirdeki alt parselleri (pasif ara + aktif son) kendi TKGM alan/nitelik ve işlem bilgileriyle gösterir."""
@@ -1055,28 +1308,15 @@ class Detay(tk.Toplevel):
             devam = json.loads(self.row.get("devam_parseller") or "[]")
         except (TypeError, ValueError):
             devam = []
-        cols = ("ada", "parsel", "durum", "alan", "nitelik", "islem_turu", "islem_tarihi")
-        tablo = ttk.Treeview(self.devam_tab, columns=cols, show="headings")
-        baslik = {"ada": "Ada", "parsel": "Parsel", "durum": "Durum", "alan": "Alan (m²)", "nitelik": "Nitelik",
-                  "islem_turu": "İşlem Türü", "islem_tarihi": "İşlem Tarihi"}
-        genislik = {"ada": 70, "parsel": 80, "durum": 80, "alan": 110, "nitelik": 190, "islem_turu": 140, "islem_tarihi": 100}
-        for c in cols:
-            tablo.heading(c, text=baslik[c])
-            tablo.column(c, width=genislik[c], anchor="w")
-        tablo.tag_configure("Pasif", foreground="#8a8a8a")
-        for p in devam:
-            tablo.insert("", "end", values=(p.get("ada"), p.get("parsel"), p.get("durum"),
-                                            p.get("alan"), p.get("nitelik"),
-                                            p.get("islem_turu") or "-", p.get("islem_tarihi") or "-"),
-                         tags=(p.get("durum"),))
-        tablo.pack(fill="both", expand=True, padx=12, pady=12)
+        satirlar = [((p.get("ada"), p.get("parsel"), p.get("durum"), p.get("alan"), p.get("nitelik"),
+                      p.get("islem_turu") or "-", p.get("islem_tarihi") or "-"), p.get("durum") == "Pasif") for p in devam]
+        ly = QVBoxLayout(self.devam_tab)
+        ly.addWidget(_tablo_yap(["Ada", "Parsel", "Durum", "Alan (m²)", "Nitelik", "İşlem Türü", "İşlem Tarihi"],
+                                [70, 80, 80, 110, 190, 140, 100], satirlar, "#8a8a8a"))
         if not devam:
-            ttk.Label(self.devam_tab, text="Parsel hareket zinciri bilgisi bulunamadı.").pack(pady=18)
+            ly.addWidget(QLabel("Parsel hareket zinciri bilgisi bulunamadı."), 0, Qt.AlignmentFlag.AlignHCenter)
 
     def _ham(self):
-        t = tk.Text(self.ham_tab, wrap="none", font=("Consolas", 9), bg=self.pal["cv_bg"], fg=self.pal["cv_yazi"],
-                   insertbackground=self.pal["cv_yazi"])
-        t.pack(fill="both", expand=True, padx=8, pady=8)
         parca = []
         for ad, v in (("PARSEL YANITI", self.row.get("ham_parsel")), ("HAREKET YANITI", self.row.get("ham_hareket"))):
             try:
@@ -1084,204 +1324,270 @@ class Detay(tk.Toplevel):
             except ValueError:
                 parca.append(f"=== {ad} ===\n{v}")
         self.ham_metin = "\n\n".join(parca)
-        t.insert("1.0", self.ham_metin)
-        ttk.Button(self.ham_tab, text="Panoya kopyala", command=self.kopyala).pack(pady=(0, 8))
+        ly = QVBoxLayout(self.ham_tab)
+        t = QPlainTextEdit()
+        t.setReadOnly(True)
+        t.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        t.setFont(QFont("Consolas", 9))
+        t.setStyleSheet(f"background:{self.pal['cv_bg']};color:{self.pal['cv_yazi']};")
+        t.setPlainText(self.ham_metin)
+        ly.addWidget(t)
+        b = QPushButton("Panoya kopyala")
+        b.clicked.connect(self.kopyala)
+        ly.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
 
     def kopyala(self):
-        self.clipboard_clear()
-        self.clipboard_append(self.ham_metin)
+        QGuiApplication.clipboard().setText(self.ham_metin)
 
 
-class HareketAyar(tk.Toplevel):
+class HareketAyar(QDialog):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
-        self.title("Hareket servisini ayarla")
-        self.geometry("760x470")
+        self.setWindowTitle("Hareket servisini ayarla")
+        self.resize(760, 470)
         yardim = ("Pasif parselin hareket listesini (yeni parselleri) getiren servis adresi bir kez tanımlanır.\n\n"
                   "1) Tarayıcıda parselsorgu.tkgm.gov.tr açın, F12 tuşuna basın, 'Ağ / Network' sekmesinde 'Fetch/XHR' seçin.\n"
                   "2) Pasif bir parseli sorgulayıp 'Parsel hareketlerini göster' bağlantısına tıklayın.\n"
                   "3) Listede yeni beliren isteğe tıklayın, 'Request URL' adresini kopyalayıp aşağıya yapıştırın.\n"
                   "4) Bu programda o parselin satırını seçip 'Örnek adresi şablona çevir'e basın, sonra Kaydet.\n"
                   "   (Adresteki mahalle kimliği, ada ve parsel değerleri {mahalle_id} {ada} {parsel} ile değiştirilir.)")
-        ttk.Label(self, text=yardim, justify="left", wraplength=720).pack(anchor="w", padx=16, pady=14)
-        self.var = tk.StringVar(value=ayar_oku("hareket_url"))
-        ttk.Entry(self, textvariable=self.var, width=110).pack(padx=16, fill="x")
-        f = ttk.Frame(self)
-        f.pack(pady=12)
-        ttk.Button(f, text="Örnek adresi şablona çevir", command=self.cevir).pack(side="left", padx=6)
-        ttk.Button(f, text="Kaydet", command=self.kaydet).pack(side="left", padx=6)
-        ttk.Button(f, text="Temizle (servisi kapat)", command=lambda: self.var.set("")).pack(side="left", padx=6)
-        ttk.Label(self, text="Şablon örneği:  https://.../api/.../{mahalle_id}/{ada}/{parsel}", foreground="#666").pack(anchor="w", padx=16)
+        ly = QVBoxLayout(self)
+        ly.setContentsMargins(16, 14, 16, 14)
+        y = QLabel(yardim)
+        y.setWordWrap(True)
+        ly.addWidget(y)
+        self.var = QLineEdit(ayar_oku("hareket_url"))
+        ly.addWidget(self.var)
+        satir = QHBoxLayout()
+        satir.addStretch(1)
+        for ad, fn in (("Örnek adresi şablona çevir", self.cevir), ("Kaydet", self.kaydet),
+                       ("Temizle (servisi kapat)", lambda: self.var.setText(""))):
+            b = QPushButton(ad)
+            b.clicked.connect(fn)
+            satir.addWidget(b)
+        satir.addStretch(1)
+        ly.addLayout(satir)
+        o = QLabel("Şablon örneği:  https://.../api/.../{mahalle_id}/{ada}/{parsel}")
+        o.setStyleSheet("color:#666;")
+        ly.addWidget(o)
+        ly.addStretch(1)
 
     def cevir(self):
-        sec = self.app.tree.selection()
+        sec = self.app.secili_indeksler()
         if not sec:
-            messagebox.showinfo("Bilgi", "Önce ana listede örnek parselin satırını seçin.", parent=self)
+            bilgi(self, "Bilgi", "Önce ana listede örnek parselin satırını seçin.")
             return
-        self.var.set(hareket_sablonu_yap(self.var.get(), self.app.rows[int(sec[0])]))
+        self.var.setText(hareket_sablonu_yap(self.var.text(), self.app.rows[sec[0]]))
 
     def kaydet(self):
-        ayar_yaz("hareket_url", self.var.get().strip())
-        messagebox.showinfo("Kaydedildi", "Hareket servisi ayarı kaydedildi.", parent=self)
-        self.destroy()
+        ayar_yaz("hareket_url", self.var.text().strip())
+        bilgi(self, "Kaydedildi", "Hareket servisi ayarı kaydedildi.")
+        self.accept()
 
 
-class MahalleEslestir(tk.Toplevel):
-    """İş Takip'teki mahalle adı TKGM listesinde birebir bulunamazsa, TKGM'deki resmi adı bir kez seçtirir (hatırlanır)."""
+class MahalleEslestir(QDialog):
+    """İş Takip'teki mahalle adı TKGM listesinde birebir bulunamazsa, TKGM'deki resmi adı bir kez seçtirir (hatırlanır).
+    Kullanım: d = MahalleEslestir(master, adlar, tkgm_adlar); d.exec(); d.sonuc"""
 
     def __init__(self, master, adlar, tkgm_adlar):
-        super().__init__(master)
-        self.title("Mahalle eşleştir")
+        super().__init__(master if isinstance(master, QWidget) else None)
+        self.setWindowTitle("Mahalle eşleştir")
+        self.setModal(True)
         self.sonuc, self.vars = {}, {}
-        ttk.Label(self, wraplength=600, justify="left", text=(
-            "İş Takip'teki şu mahalle adları TKGM listesinde birebir bulunamadı. Doğru TKGM mahallesini seçin; seçim "
-            "hatırlanır, İş Takip'teki mahalle adı DEĞİŞMEZ. Emin olmadıklarınızı '(atla)' bırakın.")).pack(padx=14, pady=12)
-        kap = ttk.Frame(self)
-        kap.pack(fill="x", padx=14)
+        ly = QVBoxLayout(self)
+        ly.setContentsMargins(14, 12, 14, 12)
+        a = QLabel("İş Takip'teki şu mahalle adları TKGM listesinde birebir bulunamadı. Doğru TKGM mahallesini seçin; seçim "
+                   "hatırlanır, İş Takip'teki mahalle adı DEĞİŞMEZ. Emin olmadıklarınızı '(atla)' bırakın.")
+        a.setWordWrap(True)
+        a.setMinimumWidth(600)
+        ly.addWidget(a)
+        izgara = QGridLayout()
         for i, ad in enumerate(adlar):
-            ttk.Label(kap, text=ad, width=28).grid(row=i, column=0, sticky="w", pady=3)
-            v = tk.StringVar(value="(atla)")
-            ttk.Combobox(kap, textvariable=v, values=["(atla)"] + tkgm_adlar, width=36, state="readonly").grid(row=i, column=1, pady=3)
-            self.vars[ad] = v
-        ttk.Button(self, text="Tamam", command=self._tamam).pack(pady=12)
-        self.transient(master)
-        self.grab_set()
-        self.wait_window(self)
+            izgara.addWidget(QLabel(ad), i, 0)
+            c = QComboBox()
+            c.addItems(["(atla)"] + list(tkgm_adlar))
+            c.setMinimumWidth(300)
+            izgara.addWidget(c, i, 1)
+            self.vars[ad] = c
+        ly.addLayout(izgara)
+        b = QPushButton("Tamam")
+        b.clicked.connect(self._tamam)
+        ly.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
 
     def _tamam(self):
-        self.sonuc = {ad: v.get() for ad, v in self.vars.items() if v.get() != "(atla)"}
-        self.destroy()
+        self.sonuc = {ad: c.currentText() for ad, c in self.vars.items() if c.currentText() != "(atla)"}
+        self.accept()
 
 
-class App(tk.Toplevel):
+class App(QMainWindow):
+    _durum_sig = Signal(str)
+    _ilerleme_sig = Signal(int)
+    _yenile_sig = Signal()
+    _sayac_sig = Signal()
+    _geri_sig = Signal(object, object)
+    _bitti_sig = Signal(str, str)
+    _iller_sig = Signal(str)
+    _aktarim_sig = Signal(object, str, str, object, str, bool)
+
     def __init__(self, master=None, kaynak=None, takip_db=None, sonuc_geri_cagir=None):
         t0 = time.perf_counter()
-        self._standalone_root = None
-        if master is None:
-            self._standalone_root = tk.Tk()
-            master = self._standalone_root
-        super().__init__(master)
+        qapp_hazirla()
+        super().__init__(master if isinstance(master, QWidget) else None)
+        if master is not None and not isinstance(master, QWidget) and hasattr(master, "after"):
+            _tk_koprusu(master)  # eski Tk tabanlı İş Takip içinden açılma (geçiş dönemi)
         self.kaynak = kaynak_normalle(kaynak)  # İş Takip'teki AÇIK işler
         self.takip_db = str(takip_db) if takip_db else ""  # sonuçların yazılacağı İş Takip veritabanı (isteğe bağlı)
         self.sonuc_geri_cagir = sonuc_geri_cagir          # f(work_id, sonuc_sozlugu): İş Takip arayüzünü yenilemek için (isteğe bağlı)
         self.acik_idler = {k["id"] for k in self.kaynak} if kaynak is not None else None
         self.baglar = {}
-        self.title("Toplu Parsel Sorgulama | TKGM")
-        self.geometry("1280x780")
-        self.minsize(1050, 650)
+        self.setWindowTitle("Toplu Parsel Sorgulama | TKGM")
+        self.resize(1280, 780)
+        self.setMinimumSize(1050, 650)
         self.rows = []
         self.busy = False
-        self.kapalilari_goster = tk.BooleanVar(value=False)
         self._aktarim_suruyor = False
+        self._kapaniyor = False
+        self._durdur = threading.Event()
         self.gizli_sayi = 0
-        self._style()
+        self._detaylar = []
+        self.koyu = koyu_mu(self)
+        self.pal = PALET_KOYU if self.koyu else PALET_ACIK
         self._ui()
+        self._durum_sig.connect(lambda t: self.status.set(t))
+        self._ilerleme_sig.connect(self.progress.setValue)
+        self._yenile_sig.connect(self.refresh)
+        self._sayac_sig.connect(self.sayac_goster)
+        self._geri_sig.connect(self._geri_cagir_ui)
+        self._bitti_sig.connect(self._sorgu_bitti)
+        self._iller_sig.connect(self._illeri_yukle_ui)
+        self._aktarim_sig.connect(self._aktarim_tamam)
         self.load_saved()
         self.sayac_goster()
-        for alan, var in self.vars.items():
-            var.trace_add("write", lambda *_args, k=alan, v=var: ayar_yaz("secim_" + k, v.get()))
-        self.after(50, self.illeri_yukle)
+        for alan, kutu in self.vars.items():
+            kutu_metin = kutu.lineEdit() if isinstance(kutu, QComboBox) else kutu
+            kutu_metin.textChanged.connect(lambda _t, k=alan, v=kutu: ayar_yaz("secim_" + k, v.get()))
+        QTimer.singleShot(50, self.illeri_yukle)
         if self.kaynak:  # açık işler ARKA PLANDA parsel listesine işlenir; pencere beklemeden açılır
-            self.after(100, lambda: self.is_listesinden_aktar(sessiz=True))
+            QTimer.singleShot(100, lambda: self.is_listesinden_aktar(sessiz=True))
         self.status.set(f"Pencere {time.perf_counter() - t0:.1f} sn'de açıldı."
                         + (" Açık işler arka planda aktarılıyor..." if self.kaynak else ""))
-
-    def _style(self):
-        st = ttk.Style(self)
-        try:
-            st.theme_use("clam")
-        except Exception:
-            pass
-        self.koyu = koyu_mu(self, st)
-        self.pal = PALET_KOYU if self.koyu else PALET_ACIK
-        st.configure("Treeview", rowheight=28, font=("Segoe UI", 9))
-        st.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
-        st.configure("TButton", padding=7, font=("Segoe UI", 9))
-        st.configure("Header.TLabel", font=("Segoe UI", 18, "bold"), foreground=self.pal["baslik"])
-        st.configure("Sub.TLabel", font=("Segoe UI", 9), foreground=self.pal["alt"])
+        _ACIK_PENCERELER.add(self)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.destroyed.connect(lambda _o=None, s=self: _ACIK_PENCERELER.discard(s))
+        self.show()
 
     def _ui(self):
-        top = ttk.Frame(self, padding=(18, 14))
-        top.pack(fill="x")
-        ttk.Label(top, text="Toplu Parsel Sorgulama", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(top, text="Aktif parselde alan ve nitelik, pasif parselde pasife alınma ibaresi ve oluşan yeni parseller gösterilir. "
-                            "Satıra çift tıklayınca hareket listesi açılır.", style="Sub.TLabel").pack(anchor="w", pady=(4, 0))
-        bar = ttk.Frame(self, padding=(18, 5))
-        bar.pack(fill="x")
-        self.btn(bar, "Excel şablonu oluştur", self.template).pack(side="left", padx=(0, 7))
-        self.btn(bar, "Excel içe aktar", self.import_excel).pack(side="left", padx=7)
-        self.btn(bar, "İş listesinden aktar", self.is_listesinden_aktar).pack(side="left", padx=7)
-        self.btn(bar, "Sonuçları İş Takip'e yaz", self.tum_sonuclari_takibe_yaz).pack(side="left", padx=7)
-        ttk.Checkbutton(bar, text="Kapanan işlerin parsellerini de göster", variable=self.kapalilari_goster,
-                        command=self.refresh).pack(side="left", padx=10)
-        self.btn(bar, "Seçili satırı sil", self.delete_selected).pack(side="left", padx=7)
-        self.btn(bar, "Listeyi temizle", self.clear_rows).pack(side="left", padx=7)
-        self.btn(bar, "Hareket servisini ayarla", lambda: HareketAyar(self)).pack(side="left", padx=7)
-        self.btn(bar, "Excel'e aktar", self.export_excel).pack(side="right", padx=(7, 0))
-        form = ttk.LabelFrame(self, text="Elle parsel ekle", padding=10)
-        form.pack(fill="x", padx=18, pady=8)
-        self.vars = {}
-        fields = [("İl", "il", 15), ("İlçe", "ilce", 18), ("Mahalle", "mahalle", 20), ("Ada", "ada", 10), ("Parsel", "parsel", 10)]
-        for i, (label, key, width) in enumerate(fields):
-            ttk.Label(form, text=label).grid(row=0, column=i, sticky="w", padx=5)
-            v = tk.StringVar()
-            self.vars[key] = v
-            if key in ("il", "ilce", "mahalle"):
-                widget = ttk.Combobox(form, textvariable=v, width=width)
-                widget.grid(row=1, column=i, sticky="ew", padx=5, pady=(3, 0))
-                if key == "il":
-                    widget.bind("<<ComboboxSelected>>", self.il_secildi)
-                elif key == "ilce":
-                    widget.bind("<<ComboboxSelected>>", self.ilce_secildi)
-                widget.bind("<KeyRelease>", lambda e, k=key: self.liste_filtrele(k, e))
-                setattr(self, key + "_combo", widget)
-            else:
-                ttk.Entry(form, textvariable=v, width=width).grid(row=1, column=i, sticky="ew", padx=5, pady=(3, 0))
-            form.columnconfigure(i, weight=1)
-        self.btn(form, "Mahalle listesini yenile", self.mahalleleri_yenile).grid(row=1, column=6, padx=6)
-        self.btn(form, "Listeye ekle", self.add_manual).grid(row=1, column=5, padx=10)
-        frame = ttk.Frame(self, padding=(18, 5))
-        frame.pack(fill="both", expand=True)
-        cols = ("il", "ilce", "mahalle", "ada", "parsel", "is", "durum", "alan", "nitelik", "yeni", "islem", "kontrol")
-        self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
-        labels = {"il": "İl", "ilce": "İlçe", "mahalle": "Mahalle", "ada": "Ada", "parsel": "Parsel", "is": "İş kayıt no", "durum": "Parsel durumu",
-                  "alan": "Alan (m²)", "nitelik": "Nitelik", "yeni": "Yeni parseller", "islem": "Pasif işlemi", "kontrol": "Son kontrol"}
-        widths = {"il": 80, "ilce": 120, "mahalle": 110, "ada": 60, "parsel": 60, "is": 90, "durum": 100, "alan": 90, "nitelik": 120,
-                  "yeni": 190, "islem": 170, "kontrol": 120}
-        for c in cols:
-            self.tree.heading(c, text=labels[c])
-            self.tree.column(c, width=widths[c], anchor="w")
-        for ad, (zemin, yazi) in self.pal["satir"].items():
-            self.tree.tag_configure(ad, background=zemin, foreground=yazi)
-        vs = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
-        hs = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vs.grid(row=0, column=1, sticky="ns")
-        hs.grid(row=1, column=0, sticky="ew")
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-        self.tree.bind("<Double-1>", lambda e: self.detay_ac())
-        bottom = ttk.Frame(self, padding=(18, 8))
-        bottom.pack(fill="x")
-        self.progress = ttk.Progressbar(bottom, mode="determinate")
-        self.progress.pack(fill="x", pady=(0, 7))
-        self.status = tk.StringVar(value="Hazır. Excel şablonundaki sütunlar: İl, İlçe, Mahalle, Ada, Parsel.")
-        ttk.Label(bottom, textvariable=self.status).pack(side="left")
-        self.btn(bottom, "Bekleyenleri sorgula", self.start_queries).pack(side="right")
-        self.btn(bottom, "Seçili satırları sorgula", lambda: self.start_queries(secili=True)).pack(side="right", padx=7)
-        self.sayac_var = tk.StringVar()
-        ttk.Label(bottom, textvariable=self.sayac_var, foreground="#18334d", font=("Segoe UI", 9, "bold")).pack(side="right", padx=14)
-        self.limit_var = tk.StringVar(value=str(limit_degeri()))
-        sp = ttk.Spinbox(bottom, from_=10, to=100, width=5, textvariable=self.limit_var, command=self.limit_degisti)
-        sp.pack(side="right")
-        sp.bind("<Return>", lambda e: self.limit_degisti())
-        sp.bind("<FocusOut>", lambda e: self.limit_degisti())
-        ttk.Label(bottom, text="Günlük üst sınır:").pack(side="right", padx=(14, 4))
+        merkez = QWidget()
+        self.setCentralWidget(merkez)
+        ana = QVBoxLayout(merkez)
+        ana.setContentsMargins(18, 14, 18, 8)
+        baslik = QLabel("Toplu Parsel Sorgulama")
+        baslik.setStyleSheet(f"font:bold 18pt 'Segoe UI';color:{self.pal['baslik']};")
+        ana.addWidget(baslik)
+        alt = QLabel("Aktif parselde alan ve nitelik, pasif parselde pasife alınma ibaresi ve oluşan yeni parseller gösterilir. "
+                     "Satıra çift tıklayınca hareket listesi açılır.")
+        alt.setStyleSheet(f"color:{self.pal['alt']};")
+        alt.setWordWrap(True)
+        ana.addWidget(alt)
 
-    def btn(self, parent, text, command):
-        return ttk.Button(parent, text=text, command=command)
+        bar = QHBoxLayout()
+        bar.addWidget(self.btn("Excel şablonu oluştur", self.template))
+        bar.addWidget(self.btn("Excel içe aktar", self.import_excel))
+        bar.addWidget(self.btn("İş listesinden aktar", self.is_listesinden_aktar))
+        bar.addWidget(self.btn("Sonuçları İş Takip'e yaz", self.tum_sonuclari_takibe_yaz))
+        self.kapalilari_goster = QCheckBox("Kapanan işlerin parsellerini de göster")
+        self.kapalilari_goster.toggled.connect(lambda _v: self.refresh())
+        bar.addWidget(self.kapalilari_goster)
+        bar.addWidget(self.btn("Seçili satırı sil", self.delete_selected))
+        bar.addWidget(self.btn("Listeyi temizle", self.clear_rows))
+        bar.addWidget(self.btn("Hareket servisini ayarla", lambda: HareketAyar(self).exec()))
+        bar.addStretch(1)
+        bar.addWidget(self.btn("Excel'e aktar", self.export_excel))
+        ana.addLayout(bar)
+
+        form = QGroupBox("Elle parsel ekle")
+        izgara = QGridLayout(form)
+        self.vars = {}
+        for i, (etiket, key) in enumerate((("İl", "il"), ("İlçe", "ilce"), ("Mahalle", "mahalle"), ("Ada", "ada"), ("Parsel", "parsel"))):
+            izgara.addWidget(QLabel(etiket), 0, i)
+            if key in ("il", "ilce", "mahalle"):
+                w = AramaliKutu()
+                if key == "il":
+                    w.secildi.connect(lambda: self.il_secildi())
+                elif key == "ilce":
+                    w.secildi.connect(lambda: self.ilce_secildi())
+                setattr(self, key + "_combo", w)
+            else:
+                w = Metin()
+            self.vars[key] = w
+            izgara.addWidget(w, 1, i)
+            izgara.setColumnStretch(i, 1)
+        izgara.addWidget(self.btn("Listeye ekle", self.add_manual), 1, 5)
+        izgara.addWidget(self.btn("Mahalle listesini yenile", self.mahalleleri_yenile), 1, 6)
+        ana.addWidget(form)
+
+        self.model = ParselModel(self.pal)
+        self.tree = QTableView()
+        self.tree.setModel(self.model)
+        self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree.verticalHeader().setVisible(False)
+        self.tree.verticalHeader().setDefaultSectionSize(28)
+        self.tree.setWordWrap(False)
+        bs = self.tree.horizontalHeader()
+        bs.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        for j, w in enumerate(ParselModel.GENISLIK):
+            self.tree.setColumnWidth(j, w)
+        self.tree.doubleClicked.connect(lambda _i: self.detay_ac())
+        ana.addWidget(self.tree, 1)
+
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(10)
+        ana.addWidget(self.progress)
+        alt_bar = QHBoxLayout()
+        self.status = DurumEtiketi("Hazır. Excel şablonundaki sütunlar: İl, İlçe, Mahalle, Ada, Parsel.")
+        alt_bar.addWidget(self.status, 1)
+        alt_bar.addSpacing(14)
+        alt_bar.addWidget(QLabel("Günlük üst sınır:"))
+        self.limit_spin = QSpinBox()
+        self.limit_spin.setRange(1, 100)
+        self.limit_spin.setKeyboardTracking(False)
+        self.limit_spin.setValue(limit_degeri())
+        self.limit_spin.valueChanged.connect(lambda _v: self.limit_degisti())
+        alt_bar.addWidget(self.limit_spin)
+        self.sayac_etiket = QLabel()
+        self.sayac_etiket.setStyleSheet("color:#18334d;font-weight:bold;" if not self.koyu else "font-weight:bold;")
+        alt_bar.addSpacing(14)
+        alt_bar.addWidget(self.sayac_etiket)
+        alt_bar.addWidget(self.btn("Seçili satırları sorgula", lambda: self.start_queries(secili=True)))
+        alt_bar.addWidget(self.btn("Bekleyenleri sorgula", self.start_queries))
+        ana.addLayout(alt_bar)
+
+    def btn(self, parent_veya_metin, metin_veya_komut, komut=None):
+        """btn(metin, komut) biçiminde de çağrılabilir (eski btn(parent, metin, komut) imzası korunur)."""
+        if komut is None:
+            metin, komut = parent_veya_metin, metin_veya_komut
+        else:
+            metin = metin_veya_komut
+        b = QPushButton(metin)
+        b.clicked.connect(lambda _c=False: komut())
+        return b
+
+    def secili_indeksler(self):
+        sm = self.tree.selectionModel()
+        if sm is None:
+            return []
+        return sorted(ix.data(Qt.ItemDataRole.UserRole) for ix in sm.selectedRows())
+
+    def closeEvent(self, olay):
+        self._kapaniyor = True
+        self._durdur.set()  # çalışan sorgu güvenle durur (bekleme süresi beklenmez)
+        for th in list(_ARKA_PLAN):
+            th.wait(8000)
+        super().closeEvent(olay)
 
     @staticmethod
     def liste_adlari(veri):
@@ -1303,70 +1609,10 @@ class App(tk.Toplevel):
             url = API + "/idariYapi/mahalleListe/" + str(ust_id)
         return get_json_onbellekli(url)
 
-    def liste_filtrele(self, alan, event=None):
-        """Yazarken odağı kaybetmeden ayrı öneri listesi göster."""
-        if event and event.keysym in ("Up", "Down", "Left", "Right", "Return", "Escape", "Tab"):
-            if event.keysym == "Escape":
-                self.oneri_kapat(alan)
-            return
-        tam = getattr(self, alan + "_tam_liste", [])
-        if not tam:
-            return
-        yazilan = self.vars[alan].get()
-        aranan = norm_ad(yazilan)
-        eslesen = [ad for ad in tam if aranan in norm_ad(ad)] if aranan else tam
-        combo = getattr(self, alan + "_combo")
-        combo["values"] = eslesen
-        if not yazilan or not eslesen or combo.focus_get() != combo:
-            self.oneri_kapat(alan)
-            return
-        self.oneri_goster(alan, eslesen)
-
-    def oneri_kapat(self, alan):
-        pencere = getattr(self, "_oneri_" + alan, None)
-        if pencere is not None:
-            try:
-                pencere.destroy()
-            except tk.TclError:
-                pass
-        setattr(self, "_oneri_" + alan, None)
-
-    def oneri_goster(self, alan, secenekler):
-        combo = getattr(self, alan + "_combo")
-        self.oneri_kapat(alan)
-        pencere = tk.Toplevel(self)
-        setattr(self, "_oneri_" + alan, pencere)
-        pencere.wm_overrideredirect(True)
-        pencere.attributes("-topmost", True)
-        x = combo.winfo_rootx()
-        y = combo.winfo_rooty() + combo.winfo_height()
-        genislik = max(combo.winfo_width(), 180)
-        yukseklik = min( min(len(secenekler), 8) * 24 + 4, 196)
-        pencere.geometry(f"{genislik}x{yukseklik}+{x}+{y}")
-        liste = tk.Listbox(pencere, height=min(len(secenekler), 8), activestyle="dotbox",
-                           takefocus=0, exportselection=False)
-        liste.pack(fill="both", expand=True)
-        for ad in secenekler[:8]:
-            liste.insert("end", ad)
-        def sec(event=None):
-            secim = liste.curselection()
-            if not secim:
-                return
-            deger = liste.get(secim[0])
-            self.vars[alan].set(deger)
-            self.oneri_kapat(alan)
-            combo.focus_set()
-            if alan == "il":
-                self.il_secildi()
-            elif alan == "ilce":
-                self.ilce_secildi()
-        liste.bind("<ButtonRelease-1>", sec)
-        liste.bind("<Return>", sec)
-        liste.bind("<MouseWheel>", lambda e: "break")
-        pencere.bind("<FocusOut>", lambda e: self.after(120, lambda: self.oneri_kapat(alan)
-                          if getattr(self, "_oneri_" + alan, None) is pencere else None))
-        # Odağı giriş kutusunda bırak: kullanıcı harf yazmaya ara vermeden devam edebilir.
-        combo.focus_set()
+    def _arka_plan(self, fn):
+        th = _Is(fn)
+        th.start()
+        return th
 
     def illeri_yukle(self):
         """İl/ilçe/mahalle listelerini ARKA PLANDA önbelleğe alır (ağ yavaşsa pencere donmaz), sonra arayüzü doldurur."""
@@ -1383,8 +1629,9 @@ class App(tk.Toplevel):
                         get_json_onbellekli(f"{API}/idariYapi/mahalleListe/{ilce_id}")
             except Exception as e:
                 hata = str(e)
-            self.after(0, self._illeri_yukle_ui, hata)
-        threading.Thread(target=isci, daemon=True).start()
+            if not self._kapaniyor:
+                self._iller_sig.emit(hata)
+        self._arka_plan(isci)
 
     def _illeri_yukle_ui(self, hata=""):
         if hata:  # ağda sorun varsa arayüz iş parçacığında tekrar ağ isteği ATILMAZ
@@ -1392,12 +1639,11 @@ class App(tk.Toplevel):
             return
         try:
             iller = self.idari_liste("il")
-            self.il_tam_liste = self.liste_adlari(iller)
-            self.il_combo["values"] = self.il_tam_liste
+            self.il_combo.listeyi_ata(self.liste_adlari(iller))
             kayitli_il = ayar_oku("secim_il")
             kayitli_ilce = ayar_oku("secim_ilce")
             kayitli_mahalle = ayar_oku("secim_mahalle")
-            if kayitli_il in self.il_tam_liste:
+            if kayitli_il in self.il_combo._tam:
                 self.vars["il"].set(kayitli_il)
                 self.il_secildi(restore=True, ilce=kayitli_ilce, mahalle=kayitli_mahalle)
         except Exception as e:
@@ -1408,19 +1654,17 @@ class App(tk.Toplevel):
             iller = self.idari_liste("il")
             il_id = find_id(feature_items(iller), ["text", "ad", "name", "ilAdi"], self.vars["il"].get())
             ilceler = self.idari_liste("ilce", il_id)
-            self.ilce_tam_liste = self.liste_adlari(ilceler)
-            self.ilce_combo["values"] = self.ilce_tam_liste
-            self.mahalle_tam_liste = []
-            self.mahalle_combo["values"] = ()
+            self.ilce_combo.listeyi_ata(self.liste_adlari(ilceler))
+            self.mahalle_combo.listeyi_ata([])
             if restore:
-                if ilce in self.ilce_tam_liste:
+                if ilce in self.ilce_combo._tam:
                     self.vars["ilce"].set(ilce)
                     self.mahalleleri_yenile(restore_mahalle=mahalle)
             else:
                 self.vars["ilce"].set("")
                 self.vars["mahalle"].set("")
         except Exception as e:
-            messagebox.showerror("İlçe listesi alınamadı", str(e))
+            hata_kutusu(self, "İlçe listesi alınamadı", str(e))
 
     def ilce_secildi(self, _event=None):
         self.mahalleleri_yenile()
@@ -1432,26 +1676,24 @@ class App(tk.Toplevel):
             ilceler = self.idari_liste("ilce", il_id)
             ilce_id = find_id(feature_items(ilceler), ["text", "ilceAdi", "ad", "name"], self.vars["ilce"].get())
             mahalleler = self.idari_liste("mahalle", ilce_id)
-            self.mahalle_tam_liste = self.liste_adlari(mahalleler)
-            self.mahalle_combo["values"] = self.mahalle_tam_liste
-            if restore_mahalle in self.mahalle_tam_liste:
+            self.mahalle_combo.listeyi_ata(self.liste_adlari(mahalleler))
+            if restore_mahalle in self.mahalle_combo._tam:
                 self.vars["mahalle"].set(restore_mahalle)
-            self.status.set(str(len(self.mahalle_tam_liste)) + " mahalle listelendi.")
+            self.status.set(str(len(self.mahalle_combo._tam)) + " mahalle listelendi.")
         except Exception as e:
-            messagebox.showerror("Mahalle listesi alınamadı", str(e))
+            hata_kutusu(self, "Mahalle listesi alınamadı", str(e))
 
     # ---- sayaç / limit
     def limit_degisti(self):
-        try:
-            v = max(1, min(int(self.limit_var.get()), 100))
-        except ValueError:
-            v = VARSAYILAN_LIMIT
-        self.limit_var.set(str(v))
+        v = max(1, min(int(self.limit_spin.value()), 100))
+        self.limit_spin.blockSignals(True)
+        self.limit_spin.setValue(v)
+        self.limit_spin.blockSignals(False)
         ayar_yaz("gunluk_limit", v)
         self.sayac_goster()
 
     def sayac_goster(self):
-        self.sayac_var.set(f"Bugün: {sayac_oku()} / {limit_degeri()} istek")
+        self.sayac_etiket.setText(f"Bugün: {sayac_oku()} / {limit_degeri()} istek")
 
     # ---- liste işlemleri
     def is_listesinden_aktar(self, sessiz=False, bekle=False):
@@ -1459,7 +1701,7 @@ class App(tk.Toplevel):
         Ağ ve hazırlık işi arka planda yapılır (pencere donmaz); veritabanına tek işlemde yazılır. bekle=True: aynı iş parçacığında çalıştırır."""
         if not self.kaynak:
             if not sessiz:
-                messagebox.showinfo("İş listesinden aktar", "Aktarılacak açık iş kaydı bulunamadı.", parent=self)
+                bilgi(self, "İş listesinden aktar", "Aktarılacak açık iş kaydı bulunamadı.")
             return
         if getattr(self, "_aktarim_suruyor", False):
             return
@@ -1476,12 +1718,13 @@ class App(tk.Toplevel):
                 sonuc = aktarim_hazirla(kaynak, il, ilce, mahalleler, esleme_hafizasi(il, ilce))
             except Exception as e:
                 hata = str(e)
-            self.after(0, self._aktarim_tamam, sonuc, il, ilce, mahalleler, hata, sessiz)
+            if not self._kapaniyor:
+                self._aktarim_sig.emit(sonuc, il, ilce, mahalleler, hata, sessiz)
 
         if bekle:
             isci()
         else:
-            threading.Thread(target=isci, daemon=True).start()
+            self._arka_plan(isci)
 
     def _aktarim_tamam(self, sonuc, il, ilce, mahalleler, hata, sessiz):
         """(Arayüz iş parçacığı) hazırlanan aktarımı uygular."""
@@ -1489,7 +1732,7 @@ class App(tk.Toplevel):
         if hata:
             self.status.set("İş aktarımı yapılamadı: TKGM mahalle listesi alınamadı - " + hata[:120])
             if not sessiz:
-                messagebox.showerror("TKGM listesi alınamadı", hata, parent=self)
+                hata_kutusu(self, "TKGM listesi alınamadı", hata)
             return
         if sonuc["eslesmeyen"] and not sessiz:
             secilen = self.mahalle_eslestir_sor(sorted(sonuc["eslesmeyen"]), mahalleler)
@@ -1549,7 +1792,7 @@ class App(tk.Toplevel):
         self.status.set("İş listesinden aktarım: " + " | ".join(mesaj[:2]) + (
             " | Eşleşmeyen mahalle var: 'İş listesinden aktar' ile eşleştirin." if sonuc["eslesmeyen"] and sessiz else ""))
         if not sessiz:
-            messagebox.showinfo("İş listesinden aktarım", "\n\n".join(mesaj), parent=self)
+            bilgi(self, "İş listesinden aktarım", "\n\n".join(mesaj))
 
     def mahalle_eslestir_sor(self, adlar, mahalleler):
         """{kaynak_mahalle: (tkgm_ad, mahalle_id)} döndürür."""
@@ -1558,8 +1801,17 @@ class App(tk.Toplevel):
             ad, kod = mahalle_adi_ve_id(item)
             if ad and kod:
                 harita[ad] = kod
-        sec = MahalleEslestir(self, adlar, sorted(harita, key=norm_ad)).sonuc
-        return {k: (v, harita[v]) for k, v in sec.items() if v in harita}
+        d = MahalleEslestir(self, adlar, sorted(harita, key=norm_ad))
+        d.exec()
+        return {k: (v, harita[v]) for k, v in d.sonuc.items() if v in harita}
+
+    def _geri_cagir_ui(self, wid, ozet):
+        """(Arayüz iş parçacığı) İş Takip'e sonuç bildirimi."""
+        if self.sonuc_geri_cagir:
+            try:
+                self.sonuc_geri_cagir(wid, ozet)
+            except Exception as e:
+                self.status.set(f"İş Takip bildirimi başarısız (#{wid}): {e}")
 
     def takibe_yaz(self, row):
         """Sorgu sonucunu bu parsele bağlı her İş Takip kaydına yazar (iş kaydının kendisi değiştirilmez)."""
@@ -1568,13 +1820,13 @@ class App(tk.Toplevel):
                 if self.takip_db:
                     takip_sonuc_yaz(self.takip_db, wid, row)
                 if self.sonuc_geri_cagir:
-                    self.after(0, self.sonuc_geri_cagir, wid, sonuc_ozeti(row))  # arayüz iş parçacığında çalışsın
+                    self._geri_sig.emit(wid, sonuc_ozeti(row))  # arayüz iş parçacığında çalışsın
             except Exception as e:
-                self.after(0, self.status.set, f"İş Takip'e yazılamadı (#{wid}): {e}")
+                self._durum_sig.emit(f"İş Takip'e yazılamadı (#{wid}): {e}")
 
     def tum_sonuclari_takibe_yaz(self):
         if not (self.takip_db or self.sonuc_geri_cagir):
-            messagebox.showinfo("İş Takip bağlantısı", "Bu pencere İş Takip veritabanına bağlı açılmamış (takip_db verilmemiş).", parent=self)
+            bilgi(self, "İş Takip bağlantısı", "Bu pencere İş Takip veritabanına bağlı açılmamış (takip_db verilmemiş).")
             return
         n = 0
         for r in self.rows:
@@ -1582,12 +1834,12 @@ class App(tk.Toplevel):
                 self.takibe_yaz(r)
                 n += len(self.baglar[satir_anahtari(r)])
         self.status.set(f"{n} iş kaydının parsel sonucu İş Takip'e yazıldı.")
-        messagebox.showinfo("İş Takip bağlantısı", f"{n} iş kaydının parsel sonucu İş Takip'e yazıldı.", parent=self)
+        bilgi(self, "İş Takip bağlantısı", f"{n} iş kaydının parsel sonucu İş Takip'e yazıldı.")
 
     def add_manual(self):
         row = {k: v.get().strip() for k, v in self.vars.items()}
         if not all(row.values()):
-            messagebox.showwarning("Eksik bilgi", "İl, ilçe, mahalle, ada ve parsel alanlarının tamamını doldurun.")
+            uyari(self, "Eksik bilgi", "İl, ilçe, mahalle, ada ve parsel alanlarının tamamını doldurun.")
             return
         self.add_row(row)
         # Parsel eklenince il/ilçe/mahalle sabit kalsın; yalnız ada ve parsel temizlensin.
@@ -1609,23 +1861,24 @@ class App(tk.Toplevel):
         return bool(ids) and self.acik_idler is not None and not any(i in self.acik_idler for i in ids)
 
     def gorunen_satirlar(self):
-        return [r for r in self.rows if self.kapalilari_goster.get() or not self.kapali_mi(r)]
+        return [r for r in self.rows if self.kapalilari_goster.isChecked() or not self.kapali_mi(r)]
 
     def refresh(self):
-        self.tree.delete(*self.tree.get_children())
-        goster = self.kapalilari_goster.get()
+        goster = self.kapalilari_goster.isChecked()
         gizli = 0
-        for i, r in enumerate(self.rows):
+        satirlar = []
+        for i, r in enumerate(list(self.rows)):
             if not goster and self.kapali_mi(r):
                 gizli += 1
                 continue
             st = r.get("status") or "Bekliyor"
             islem = f"{r.get('islem_turu') or ''} {r.get('islem_tarihi') or ''}".strip()
             kontrol = (r.get("updated") or "")[:16].replace("T", " ")
-            self.tree.insert("", "end", iid=str(i), tags=(st,), values=(
+            satirlar.append((i, st, [
                 r.get("il", ""), r.get("ilce", ""), r.get("mahalle", ""), r.get("ada", ""), r.get("parsel", ""),
                 ", ".join(f"#{k}" for k in self.baglar.get(satir_anahtari(r), [])), st,
-                r.get("alan", "") or "", r.get("nitelik", "") or "", (r.get("yeni_parseller") or "").replace("; ", ", "), islem, kontrol))
+                r.get("alan", "") or "", r.get("nitelik", "") or "", (r.get("yeni_parseller") or "").replace("; ", ", "), islem, kontrol]))
+        self.model.yukle(satirlar)
         self.gizli_sayi = gizli
 
     def ilgili_parseller(self, row):
@@ -1645,15 +1898,21 @@ class App(tk.Toplevel):
         return out
 
     def detay_ac(self):
-        sec = self.tree.selection()
+        sec = self.secili_indeksler()
         if sec:
-            row = self.rows[int(sec[0])]
-            Detay(self, row, self.ilgili_parseller(row))
+            row = self.rows[sec[0]]
+            d = Detay(self, row, self.ilgili_parseller(row))
+            d.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            self._detaylar.append(d)
+            d.destroyed.connect(lambda _o=None, x=d: self._detaylar.remove(x) if x in self._detaylar else None)
+            d.show()
 
     def template(self):
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", initialfile="Parsel_Sorgu_Sablonu.xlsx", filetypes=[("Excel", "*.xlsx")])
+        path, _ = QFileDialog.getSaveFileName(self, "Excel şablonu", "Parsel_Sorgu_Sablonu.xlsx", "Excel (*.xlsx)")
         if not path:
             return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
         wb = Workbook()
         ws = wb.active
         ws.title = "Parsel Listesi"
@@ -1666,10 +1925,10 @@ class App(tk.Toplevel):
             ws.column_dimensions[col].width = w
         ws.freeze_panes = "A2"
         wb.save(path)
-        messagebox.showinfo("Tamamlandı", "Excel şablonu oluşturuldu.")
+        bilgi(self, "Tamamlandı", "Excel şablonu oluşturuldu.")
 
     def import_excel(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xlsm")])
+        path, _ = QFileDialog.getOpenFileName(self, "Excel içe aktar", "", "Excel (*.xlsx *.xlsm)")
         if not path:
             return
         try:
@@ -1694,14 +1953,14 @@ class App(tk.Toplevel):
                     count += len(self.rows) - before
             self.status.set(f"{count} yeni parsel eklendi.")
         except Exception as e:
-            messagebox.showerror("Excel okunamadı", str(e))
+            hata_kutusu(self, "Excel okunamadı", str(e))
 
     def delete_selected(self):
-        selected = self.tree.selection()
+        selected = self.secili_indeksler()
         if not selected:
             return
-        for iid in sorted(selected, key=int, reverse=True):
-            r = self.rows.pop(int(iid))
+        for i in sorted(selected, reverse=True):
+            r = self.rows.pop(i)
             con = db()
             con.execute("DELETE FROM parcels WHERE il=? AND ilce=? AND mahalle=? AND ada=? AND parsel=?",
                         (r["il"], r["ilce"], r["mahalle"], r["ada"], r["parsel"]))
@@ -1715,7 +1974,7 @@ class App(tk.Toplevel):
     def clear_rows(self):
         if self.busy:
             return
-        if messagebox.askyesno("Onay", "Ekrandaki liste temizlensin mi? Kayıtlı sonuç veritabanı korunur."):
+        if sor(self, "Onay", "Ekrandaki liste temizlensin mi? Kayıtlı sonuç veritabanı korunur."):
             self.rows = []
             self.refresh()
 
@@ -1759,31 +2018,35 @@ class App(tk.Toplevel):
         if self.busy:
             return
         if secili:
-            pending = [self.rows[int(i)] for i in self.tree.selection()]
+            pending = [self.rows[i] for i in self.secili_indeksler()]
         else:
             pending = self.bekleyenler()
         if not pending:
-            messagebox.showinfo("Bilgi", "Sorgulanacak parsel yok. (Pasif olanlar ve yakın zamanda kontrol edilen aktif parseller atlanır; "
-                                         "belirli satırları sorgulamak için seçip 'Seçili satırları sorgula'ya basın.)")
+            bilgi(self, "Bilgi", "Sorgulanacak parsel yok. (Pasif olanlar ve yakın zamanda kontrol edilen aktif parseller atlanır; "
+                                 "belirli satırları sorgulamak için seçip 'Seçili satırları sorgula'ya basın.)")
             return
         kalan = max(limit_degeri() - sayac_oku(), 0)
         if kalan <= 0:
-            messagebox.showwarning("Günlük sınır", "Bugünkü istek üst sınırına ulaşıldı. Yarın devam edin ya da sınırı artırın.")
+            uyari(self, "Günlük sınır", "Bugünkü istek üst sınırına ulaşıldı. Yarın devam edin ya da sınırı artırın.")
             return
-        if not messagebox.askyesno("Toplu sorgu", f"{len(pending)} parsel sorgulanacak (bugün kalan istek hakkı: {kalan}). "
-                                                  "İstekler arası bekleme uygulanır. Başlatılsın mı?"):
+        if not sor(self, "Toplu sorgu", f"{len(pending)} parsel sorgulanacak (bugün kalan istek hakkı: {kalan}). "
+                                        "İstekler arası bekleme uygulanır. Başlatılsın mı?"):
             return
         self.busy = True
-        self.progress["maximum"] = len(pending)
-        self.progress["value"] = 0
-        threading.Thread(target=self.worker, args=(pending,), daemon=True).start()
+        self._durdur.clear()
+        self.progress.setMaximum(len(pending))
+        self.progress.setValue(0)
+        self._arka_plan(lambda: self.worker(pending))
 
     def worker(self, pending):
         sayim = {"Aktif": 0, "Pasif": 0, "Belirsiz": 0, "Hata": 0}
         durdu = ""
         for n, row in enumerate(pending, 1):
+            if self._durdur.is_set():
+                durdu = "Pencere kapatıldı."
+                break
             try:
-                self.after(0, self.status.set, f"Sorgulanıyor: {row['mahalle']} {row['ada']}/{row['parsel']}")
+                self._durum_sig.emit(f"Sorgulanıyor: {row['mahalle']} {row['ada']}/{row['parsel']}")
                 query_one(row)
                 row.pop("geometry", None)
                 # Harita PNG dosyası üretilmez veya diske kaydedilmez.
@@ -1799,24 +2062,30 @@ class App(tk.Toplevel):
                 sayim["Hata"] += 1
             self.save_row(row)
             self.takibe_yaz(row)
-            self.after(0, self.refresh)
-            self.after(0, self.sayac_goster)
-            self.after(0, self.progress.configure, {"value": n})
-            time.sleep(BEKLEME_SN)
+            self._yenile_sig.emit()
+            self._sayac_sig.emit()
+            self._ilerleme_sig.emit(n)
+            self._durdur.wait(BEKLEME_SN)
         self.busy = False
         ozet = f"Aktif: {sayim['Aktif']} | Pasif: {sayim['Pasif']} | Belirsiz: {sayim['Belirsiz']} | Hatalı: {sayim['Hata']}"
-        self.after(0, self.refresh)
-        self.after(0, self.sayac_goster)
-        self.after(0, self.status.set, ("Durduruldu: " + durdu + "  " if durdu else "Tamamlandı. ") + ozet)
-        self.after(0, lambda: messagebox.showinfo("Sorgu bitti", ("DURDURULDU: " + durdu + "\n\n" if durdu else "") + ozet))
+        self._bitti_sig.emit(durdu, ozet)
+
+    def _sorgu_bitti(self, durdu, ozet):
+        self.refresh()
+        self.sayac_goster()
+        self.status.set(("Durduruldu: " + durdu + "  " if durdu else "Tamamlandı. ") + ozet)
+        if not self._kapaniyor:
+            bilgi(self, "Sorgu bitti", ("DURDURULDU: " + durdu + "\n\n" if durdu else "") + ozet)
 
     def export_excel(self):
         if not self.rows:
-            messagebox.showinfo("Bilgi", "Aktarılacak kayıt yok.")
+            bilgi(self, "Bilgi", "Aktarılacak kayıt yok.")
             return
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", initialfile="Parsel_Sorgu_Sonuclari.xlsx", filetypes=[("Excel", "*.xlsx")])
+        path, _ = QFileDialog.getSaveFileName(self, "Excel'e aktar", "Parsel_Sorgu_Sonuclari.xlsx", "Excel (*.xlsx)")
         if not path:
             return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
         wb = Workbook()
         ws = wb.active
         ws.title = "Sorgu Sonuçları"
@@ -1855,10 +2124,13 @@ class App(tk.Toplevel):
         devam_ws.freeze_panes = "A2"
         devam_ws.auto_filter.ref = devam_ws.dimensions
         wb.save(path)
-        messagebox.showinfo("Tamamlandı", "Excel sonuç dosyası oluşturuldu. Parsel hareket zinciri (pasif ara ve aktif son parseller) ayrı sayfaya eklendi.")
+        bilgi(self, "Tamamlandı", "Excel sonuç dosyası oluşturuldu. Parsel hareket zinciri (pasif ara ve aktif son parseller) ayrı sayfaya eklendi.")
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
+    qapp = qapp_hazirla()
+    pencere = App()
+    kod = qapp.exec()
+    for _th in list(_ARKA_PLAN):
+        _th.wait(30000)
+    sys.exit(kod)
