@@ -1,8 +1,7 @@
-import os, sys, re, csv, json, time, base64, calendar, datetime, sqlite3, subprocess, tempfile, webbrowser, pathlib
+import os, sys, re, csv, json, time, base64, calendar, datetime, sqlite3, subprocess, tempfile, webbrowser, pathlib, threading
 from html import escape as hesc
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
-import modern_tasarim
 
 BASE = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
 DB = os.path.join(BASE, "imar_kayitlari.db")
@@ -130,6 +129,10 @@ def init_db():
     q(PARSEL_KONTROL_DDL)  # Parsel Sorgu modülünün sonuçları buraya yazar (iş kaydına dokunmaz)
     for ddl in FEN_DDL:  # Fen Klasörü: parsel işlemleri (tevhit/ifraz) eski -> yeni
         q(ddl)
+    for tablo, sutun, tip in (("parsel_kontrol", "zincir", "TEXT"), ("fen_islem", "kilit", "INTEGER DEFAULT 0"),
+                              ("fen_islem", "zincir", "TEXT"), ("fen_islem", "alan", "TEXT"), ("fen_islem", "nitelik", "TEXT")):
+        if sutun not in [r[1] for r in q(f"PRAGMA table_info({tablo})")]:  # eski veritabanını bozmadan yükselt
+            q(f"ALTER TABLE {tablo} ADD COLUMN {sutun} {tip}")
     for tur, vals in SEED.items():
         if not q("SELECT 1 FROM liste WHERE tur=?", (tur,)):
             for v in vals:
@@ -228,18 +231,18 @@ def sort_key(k, v):
 PARSEL_KONTROL_DDL = """CREATE TABLE IF NOT EXISTS parsel_kontrol (
     work_id INTEGER PRIMARY KEY, parsel_no TEXT, tkgm_mahalle TEXT, durum TEXT, alan TEXT, nitelik TEXT,
     islem_turu TEXT, islem_tarihi TEXT, yeni_parseller TEXT, nihai_aktifler TEXT, aciklama TEXT,
-    son_kontrol TEXT, onay_bekliyor INTEGER DEFAULT 0)"""
+    son_kontrol TEXT, onay_bekliyor INTEGER DEFAULT 0, zincir TEXT)"""
 
 
 def parsel_kontrol_oku():
-    """{iş_id: sonuç} — Parsel Sorgu'nun bu işe yazdığı en son TKGM sonucu."""
+    """{iş_id: sonuç} — Parsel Sorgu'nun bu işe yazdığı en son TKGM sonucu (zincir dahil)."""
     try:
         satirlar = q("SELECT work_id, durum, islem_turu, islem_tarihi, yeni_parseller, nihai_aktifler, aciklama, alan, nitelik, "
-                     "parsel_no, tkgm_mahalle, son_kontrol, onay_bekliyor FROM parsel_kontrol")
+                     "parsel_no, tkgm_mahalle, son_kontrol, onay_bekliyor, zincir FROM parsel_kontrol")
     except sqlite3.Error:
         return {}
     kol = ("durum", "islem_turu", "islem_tarihi", "yeni", "nihai", "aciklama", "alan", "nitelik", "parsel_no", "tkgm_mahalle",
-           "son_kontrol", "onay")
+           "son_kontrol", "onay", "zincir")
     return {r[0]: dict(zip(kol, [x if x is not None else "" for x in r[1:]])) for r in satirlar}
 
 
@@ -318,25 +321,43 @@ def parsel_otomatik_onay(pk):
 FEN_DDL = [
     """CREATE TABLE IF NOT EXISTS fen_islem (
         id INTEGER PRIMARY KEY AUTOINCREMENT, work_id INTEGER, mahalle TEXT, islem_turu TEXT, islem_tarihi TEXT,
-        kaynak TEXT, aciklama TEXT, imza TEXT, olusturma TEXT)""",
+        kaynak TEXT, aciklama TEXT, imza TEXT, olusturma TEXT, kilit INTEGER DEFAULT 0, zincir TEXT, alan TEXT, nitelik TEXT)""",
     "CREATE TABLE IF NOT EXISTS fen_parsel (islem_id INTEGER, ada TEXT, parsel TEXT, rol TEXT)",
     "CREATE INDEX IF NOT EXISTS fen_parsel_ix ON fen_parsel (ada, parsel)",
 ]
 
 
-def fen_kayit_ekle(mahalle, tur, tarih, eski, yeni, kaynak, work_id=None, aciklama="", imza=""):
+def fen_kayit_ekle(mahalle, tur, tarih, eski, yeni, kaynak, work_id=None, aciklama="", imza="", zincir="", alan="", nitelik="", ara=()):
     con = sqlite3.connect(DB)
     try:
         with con:
-            iid = con.execute("INSERT INTO fen_islem (work_id, mahalle, islem_turu, islem_tarihi, kaynak, aciklama, imza, olusturma) "
-                              "VALUES (?,?,?,?,?,?,?,?)", (work_id, mahalle, tur, tarih, kaynak, aciklama, imza,
-                                                           datetime.datetime.now().isoformat(timespec="seconds"))).lastrowid
-            for rol, liste_ in (("eski", eski), ("yeni", yeni)):
+            iid = con.execute("INSERT INTO fen_islem (work_id, mahalle, islem_turu, islem_tarihi, kaynak, aciklama, imza, olusturma, "
+                              "zincir, alan, nitelik) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                              (work_id, mahalle, tur, tarih, kaynak, aciklama, imza,
+                               datetime.datetime.now().isoformat(timespec="seconds"), zincir, alan, nitelik)).lastrowid
+            for rol, liste_ in (("eski", eski), ("yeni", yeni), ("ara", ara)):
                 for ada, pr in liste_:
                     con.execute("INSERT INTO fen_parsel VALUES (?,?,?,?)", (iid, ada, pr, rol))
     finally:
         con.close()
     return iid
+
+
+def fen_kayit_guncelle(iid, mahalle, tur, tarih, eski, yeni, aciklama, kilit=None):
+    """Elle düzenleme. TKGM kaynaklı kayıtta kilit=1 yapılır: sonraki otomatik eşitlemede ÜZERİNE YAZILMAZ."""
+    con = sqlite3.connect(DB)
+    try:
+        with con:
+            con.execute("UPDATE fen_islem SET mahalle=?, islem_turu=?, islem_tarihi=?, aciklama=? WHERE id=?",
+                        (mahalle, tur, tarih, aciklama, iid))
+            if kilit is not None:
+                con.execute("UPDATE fen_islem SET kilit=? WHERE id=?", (kilit, iid))
+            con.execute("DELETE FROM fen_parsel WHERE islem_id=? AND rol IN ('eski', 'yeni')", (iid,))  # zincirdeki ara parseller korunur
+            for rol, liste_ in (("eski", eski), ("yeni", yeni)):
+                for ada, pr in liste_:
+                    con.execute("INSERT INTO fen_parsel VALUES (?,?,?,?)", (iid, ada, pr, rol))
+    finally:
+        con.close()
 
 
 def fen_sil_kayit(iid):
@@ -345,18 +366,23 @@ def fen_sil_kayit(iid):
 
 
 def fen_senkronla():
-    """TKGM'den gelen PASİF sonuçları Fen Klasörü'ne işler: eski = iş kaydındaki tüm parseller, yeni = TKGM'deki aktif parseller.
-    Değişmeyen kayıtlar yeniden yazılmaz (imza karşılaştırması). Elle eklenen kayıtlara dokunulmaz."""
+    """TKGM'den gelen PASİF sonuçları Fen Klasörü'ne işler: eski = iş kaydındaki tüm parseller, yeni = TKGM'deki aktif parseller;
+    alan, nitelik ve hareket zinciri de saklanır. Değişmeyen kayıtlar yeniden yazılmaz. Elle eklenen ve elle DÜZENLENEN (kilitli)
+    kayıtlara dokunulmaz."""
     pk = parsel_kontrol_oku()
     isler = {i: (mh, ap) for i, mh, ap in q("SELECT id, mahalle, ada_parsel FROM kayit")}
-    mevcut = {w: (iid, imza) for iid, w, imza in q("SELECT id, work_id, imza FROM fen_islem WHERE kaynak='TKGM'")}
+    mevcut = {w: (iid, imza, kilit or 0) for iid, w, imza, kilit in q("SELECT id, work_id, imza, kilit FROM fen_islem WHERE kaynak='TKGM'")}
     n = 0
     for wid in list(mevcut):
+        if mevcut[wid][2]:
+            continue  # elle düzenlenmiş
         if wid not in pk or pk[wid]["durum"] != "Pasif" or wid not in isler:  # sonuç artık geçerli değil / iş silindi
             fen_sil_kayit(mevcut.pop(wid)[0])
             n += 1
     for wid, p in pk.items():
         if p["durum"] != "Pasif" or wid not in isler:
+            continue
+        if wid in mevcut and mevcut[wid][2]:
             continue
         mah, ap = isler[wid]
         eski = parselleri_coz(ap)
@@ -367,12 +393,21 @@ def fen_senkronla():
         yeni = parselleri_coz(yeni_metin)
         if not (yeni or p["islem_turu"] or p["islem_tarihi"]):
             continue
-        imza = json.dumps([mah, ap, p["islem_turu"], p["islem_tarihi"], yeni_metin], ensure_ascii=False)
+        imza = json.dumps([mah, ap, p["islem_turu"], p["islem_tarihi"], yeni_metin, p["alan"], p["nitelik"], p.get("zincir", "")],
+                          ensure_ascii=False)
         if wid in mevcut and mevcut[wid][1] == imza:
             continue
         if wid in mevcut:
             fen_sil_kayit(mevcut[wid][0])
-        fen_kayit_ekle(mah, p["islem_turu"] or "", p["islem_tarihi"] or "", eski, yeni, "TKGM", wid, p["aciklama"] or "", imza)
+        ara, z = [], zincir_coz(p.get("zincir"))
+        if z:  # zincirde ara aşamada pasif kalan parseller de aranabilsin
+            for d in z.get("devam", []):
+                if d.get("durum") == "Pasif":
+                    for x in parselleri_coz(d["no"]):
+                        if x not in eski and x not in yeni and x not in ara:
+                            ara.append(x)
+        fen_kayit_ekle(mah, p["islem_turu"] or "", p["islem_tarihi"] or "", eski, yeni, "TKGM", wid, p["aciklama"] or "", imza,
+                       p.get("zincir", ""), p["alan"] or "", p["nitelik"] or "", ara)
         n += 1
     return n
 
@@ -396,7 +431,8 @@ def fen_ara_sorgu(mahalle, ada, parsel):
         vurgu = [(r[0], "") for r in q("SELECT id FROM fen_islem")]
     out = []
     for iid, rol in vurgu:
-        i = q("SELECT id, mahalle, islem_turu, islem_tarihi, kaynak, work_id, aciklama FROM fen_islem WHERE id=?", (iid,))
+        i = q("SELECT id, mahalle, islem_turu, islem_tarihi, kaynak, work_id, aciklama, kilit, zincir, alan, nitelik "
+              "FROM fen_islem WHERE id=?", (iid,))
         if not i:
             continue
         i = i[0]
@@ -404,10 +440,106 @@ def fen_ara_sorgu(mahalle, ada, parsel):
             continue
         satirlar = q("SELECT ada, parsel, rol FROM fen_parsel WHERE islem_id=? ORDER BY rowid", (iid,))
         out.append({"id": i[0], "mahalle": i[1] or "", "tur": i[2] or "", "tarih": i[3] or "", "kaynak": i[4] or "",
-                    "work_id": i[5], "aciklama": i[6] or "", "rol": rol,
-                    "eski": [(a, p) for a, p, r in satirlar if r == "eski"], "yeni": [(a, p) for a, p, r in satirlar if r == "yeni"]})
+                    "work_id": i[5], "aciklama": i[6] or "", "kilit": i[7] or 0, "zincir": i[8] or "", "alan": i[9] or "",
+                    "nitelik": i[10] or "", "rol": rol,
+                    "eski": [(a, p) for a, p, r in satirlar if r == "eski"], "yeni": [(a, p) for a, p, r in satirlar if r == "yeni"],
+                    "ara": [(a, p) for a, p, r in satirlar if r == "ara"]})
     out.sort(key=lambda r: (tarih_oku(r["tarih"]) or datetime.date.min, r["id"]), reverse=True)
     return out
+
+
+def _parsel_onyukle():
+    """Parsel Sorgu modülünü (requests/openpyxl yüklemesi dahil) arka planda önceden yükler: düğmeye basınca beklenmez."""
+    try:
+        import parsel_sorgu_modulu  # noqa: F401
+    except Exception:
+        pass
+
+
+def no_etiket(no):
+    no = str(no or "")
+    return no[2:] if no.startswith("0/") else no
+
+
+def zincir_coz(metin):
+    try:
+        z = json.loads(metin) if metin else None
+    except (TypeError, ValueError):
+        z = None
+    return z if isinstance(z, dict) and isinstance(z.get("kok"), dict) else None
+
+
+def zincir_modeli(z, eski, yeni):
+    """Grafik için düğümler ({no: 'Pasif'|'Aktif'|'Pasif*'}) ve kenarlar [(kimden, kime)].
+    'Pasif*': iş kaydında yazılı ama sorgulanmamış parsel; tevhitte aynı yeni parsellere birleşmiş sayılır."""
+    dugum, kenar = {}, []
+    if z:
+        kok = z["kok"]
+        dugum[kok["no"]] = "Pasif" if (kok.get("durum") or "Pasif") != "Aktif" else "Aktif"
+        for d in z.get("devam", []):
+            dugum[d["no"]] = d.get("durum") if d.get("durum") in ("Aktif", "Pasif") else "Aktif"
+        for p in [kok] + list(z.get("devam", [])):
+            for y in p.get("yeni", []):
+                kenar.append((p["no"], y))
+                dugum.setdefault(y, "Aktif")
+        if "tevhit" in tr_lower(kok.get("islem_turu")):
+            for a, pr in eski:
+                no = f"{a}/{pr}"
+                if no not in dugum:
+                    dugum[no] = "Pasif*"
+                    kenar += [(no, y) for y in kok.get("yeni", [])]
+    else:
+        for a, pr in eski:
+            dugum[f"{a}/{pr}"] = "Pasif"
+        for a, pr in yeni:
+            dugum[f"{a}/{pr}"] = "Aktif"
+        kenar = [(f"{a}/{pr}", f"{b}/{qq}") for a, pr in eski for b, qq in yeni]
+    return dugum, kenar
+
+
+def zincir_grafik_ciz(cv, dugum, kenar, vurgu="", y0=40, temizle=True):
+    if temizle:
+        cv.delete("all")
+    w = max(cv.winfo_width(), 560)
+    if not dugum:
+        cv.create_text(w / 2, 90, text="Grafik için parsel bilgisi yok", fill=SOLUK)
+        return
+    gelen = {n: [] for n in dugum}
+    for a, b in kenar:
+        if a in gelen and b in gelen:
+            gelen[b].append(a)
+    seviye = {n: 0 for n in dugum if not gelen[n]}
+    for _ in range(len(dugum) + 1):  # en uzun yola göre seviye
+        degisti = False
+        for a, b in kenar:
+            if a in seviye and b in dugum and seviye.get(b, -1) < seviye[a] + 1 and seviye[a] < len(dugum):
+                seviye[b] = seviye[a] + 1
+                degisti = True
+        if not degisti:
+            break
+    for n in dugum:
+        seviye.setdefault(n, 0)
+    satirlar = {}
+    for n in dugum:
+        satirlar.setdefault(seviye[n], []).append(n)
+    konum = {}
+    for sv, liste_ in satirlar.items():
+        for i, n in enumerate(liste_):
+            konum[n] = (w * (i + 1) / (len(liste_) + 1), y0 + sv * 70)
+    for a, b in kenar:
+        if a in konum and b in konum:
+            (x1, y1), (x2, y2) = konum[a], konum[b]
+            cv.create_line(x1, y1 + 16, x2, y2 - 16, fill=SOLUK, width=2, arrow="last")
+    for n, (x, y) in konum.items():
+        d = dugum[n]
+        dolgu, yazi = (KENAR, METIN) if d == "Pasif" else ("#4d7c0f", "#ffffff") if d == "Aktif" else (KART, SOLUK)
+        secili = n == vurgu
+        cv.create_rectangle(x - 46, y - 16, x + 46, y + 16, fill=dolgu, outline=VURGU if secili else SOLUK,
+                            width=3 if secili else 1, dash=(4, 2) if d == "Pasif*" else ())
+        cv.create_text(x, y, text=no_etiket(n) + ("*" if d == "Pasif*" else ""), fill=yazi, font=("Segoe UI", 10))
+    if "Pasif*" in dugum.values():
+        cv.create_text(w / 2, y0 + (max(seviye.values()) + 1) * 70 - 10, fill=SOLUK, font=("Segoe UI", 9),
+                       text="* iş kaydında yazılı, sorgulanmadı; tevhitle birleşmiş sayıldı")
 
 
 class Takvim(tk.Toplevel):
@@ -422,7 +554,6 @@ class Takvim(tk.Toplevel):
     def __init__(s, parent, deger, ayrac, sonuc, x=None, y=None):
         super().__init__(parent)
         s.title("Tarih Seç")
-        modern_tasarim.tema_uygula(s, KOYU)
         s.resizable(False, False)
         s.ayrac, s.sonuc = ayrac, sonuc
         s.bugun = datetime.date.today()
@@ -441,10 +572,10 @@ class Takvim(tk.Toplevel):
         s.cv.bind("<Motion>", s._hover)
         s.cv.bind("<Leave>", lambda e: s.cv.delete("hov"))
         alt = ttk.Frame(s)
-        alt.pack(pady=(4, 10))
-        ttk.Button(alt, text="Bugün", style="Accent.TButton", command=lambda: s.sec(s.bugun.day, s.bugun.month, s.bugun.year)).pack(side="left", padx=4)
-        ttk.Button(alt, text="Temizle", command=lambda: (s.sonuc(""), s.destroy())).pack(side="left", padx=4)
-        ttk.Button(alt, text="İptal", command=s.destroy).pack(side="left", padx=4)
+        alt.pack(pady=(2, 8))
+        ttk.Button(alt, text="Bugün", command=lambda: s.sec(s.bugun.day, s.bugun.month, s.bugun.year)).pack(side="left", padx=3)
+        ttk.Button(alt, text="Temizle", command=lambda: (s.sonuc(""), s.destroy())).pack(side="left", padx=3)
+        ttk.Button(alt, text="İptal", command=s.destroy).pack(side="left", padx=3)
         s.bind("<Escape>", lambda e: s.destroy())
         s.ciz()
         if x is not None:
@@ -586,39 +717,25 @@ class Form(tk.Toplevel):
     def __init__(s, app, rid=None, kopya=None):
         super().__init__(app.root)
         s.app, s.rid, s.v = app, rid, {}
-        koyu = s.app.koyu_var.get()
-        modern_tasarim.tema_uygula(s, koyu)
-        baslik = "Yeni Kayıt (Çoğaltılan Satırdan)" if kopya else ("Kayıt Düzenle" if rid else "Yeni İmar & Encümen Kaydı")
-        s.title(baslik)
-        modern_tasarim.pencere_merkeze_yerlestir(s, 760, 680)
-        s.minsize(660, 560)
-        modern_tasarim.ozel_baslik(s, baslik, koyu, "T.C. Mustafakemalpaşa Belediyesi• İmar Kayıt Formu")
-
-        govde = ttk.Frame(s, padding=(18, 14))
-        govde.pack(fill="both", expand=True)
-
+        s.title("Yeni kayıt (çoğaltılan satırdan)" if kopya else "Kayıt")
         kaynak = rid or kopya
         row = q(f"SELECT {','.join(KEYS)} FROM kayit WHERE id=?", (kaynak,))[0] if kaynak else None
         for i, (k, l, t) in enumerate(FIELDS):
-            ttk.Label(govde, text=l).grid(row=i, column=0, sticky="e", padx=(6, 10), pady=3)
+            ttk.Label(s, text=l).grid(row=i, column=0, sticky="e", padx=6, pady=3)
             s.v[k] = tk.StringVar(value=(row[i] or "") if row and (not kopya or k in s.KOPYA) else "")
             if t and t.startswith("liste:"):
-                AramaliCombobox(govde, (lambda tur=t[6:]: liste(tur)), textvariable=s.v[k], width=46).grid(row=i, column=1, sticky="w", pady=3)
+                AramaliCombobox(s, (lambda tur=t[6:]: liste(tur)), textvariable=s.v[k], width=57).grid(row=i, column=1, pady=3)
             else:
-                ttk.Entry(govde, textvariable=s.v[k], width=48).grid(row=i, column=1, sticky="w", pady=3)
+                ttk.Entry(s, textvariable=s.v[k], width=60).grid(row=i, column=1, pady=3)
             if t == "dosya":
-                ttk.Button(govde, text="Dosya Seç", command=lambda k=k: s.pick(k)).grid(row=i, column=2, padx=6, sticky="w")
+                ttk.Button(s, text="Seç", command=lambda k=k: s.pick(k)).grid(row=i, column=2, padx=4)
             if k in DATES:
-                ttk.Button(govde, text="Takvim", command=lambda k=k: Takvim(s, s.v[k].get(), DATES[k], s.v[k].set)).grid(row=i, column=2, padx=6, sticky="w")
+                ttk.Button(s, text="Takvim", command=lambda k=k: Takvim(s, s.v[k].get(), DATES[k], s.v[k].set)).grid(row=i, column=2, padx=4)
             if k == "ada_parsel":  # '728/1-2-9-10' gibi yazımlar arka planda ayrı parseller olarak okunur; ipucu yalnızca çoklu parselde görünür
-                s.ap_ipucu = ttk.Label(govde, text=parsel_ozeti(s.v[k].get()), foreground=SOLUK, wraplength=250, justify="left")
+                s.ap_ipucu = ttk.Label(s, text=parsel_ozeti(s.v[k].get()), foreground=SOLUK, wraplength=300, justify="left")
                 s.ap_ipucu.grid(row=i, column=2, sticky="w", padx=6)
                 s.v[k].trace_add("write", lambda *a: s.ap_ipucu.config(text=parsel_ozeti(s.v["ada_parsel"].get())))
-
-        alt_bar = ttk.Frame(s, padding=(18, 10))
-        alt_bar.pack(fill="x", side="bottom")
-        ttk.Button(alt_bar, text="Kaydet", command=s.save, style="Accent.TButton").pack(side="right", padx=6)
-        ttk.Button(alt_bar, text="İptal", command=s.destroy).pack(side="right", padx=6)
+        ttk.Button(s, text="Kaydet", command=s.save, style="Accent.TButton").grid(row=len(FIELDS), column=1, pady=12)
 
     def pick(s, k):
         p = dosya_sec_dialog("karar" if k.startswith("karar") else "makbuz")
@@ -659,45 +776,19 @@ class Listeler(tk.Toplevel):
     def __init__(s, app):
         super().__init__(app.root)
         s.app = app
-        koyu = s.app.koyu_var.get()
-        pal = modern_tasarim.tema_uygula(s, koyu)
         s.title("Seçim Listeleri")
-        modern_tasarim.pencere_merkeze_yerlestir(s, 580, 640)
-        s.minsize(480, 520)
-        modern_tasarim.ozel_baslik(s, "Seçim Listeleri Yönetimi", koyu, "Mahalle, Müellif, İşlem ve Onay Listesi")
-
-        govde = ttk.Frame(s, padding=(18, 14))
-        govde.pack(fill="both", expand=True)
-
-        ust = ttk.Frame(govde)
-        ust.pack(fill="x", pady=(0, 8))
-        ttk.Label(ust, text="Liste Türü:", font=(modern_tasarim.font_ailesi(), 9, "bold")).pack(side="left", padx=(0, 8))
-        s.cb = ttk.Combobox(ust, state="readonly", values=list(LT.values()), width=24)
+        s.cb = ttk.Combobox(s, state="readonly", values=list(LT.values()), width=20)
         s.cb.current(0)
-        s.cb.pack(side="left")
+        s.cb.grid(row=0, column=0, columnspan=2, pady=6)
         s.cb.bind("<<ComboboxSelected>>", lambda e: s.yenile())
-
-        lb_frame = ttk.Frame(govde)
-        lb_frame.pack(fill="both", expand=True, pady=4)
-        s.lb = tk.Listbox(lb_frame, width=40, height=14, relief="flat", highlightthickness=1,
-                          highlightbackground=pal["kenar"], bg=pal["kart"], fg=pal["metin"],
-                          selectbackground=pal["vurgu"], selectforeground="#FFFFFF")
-        lb_sb = ttk.Scrollbar(lb_frame, orient="vertical", command=s.lb.yview)
-        s.lb.configure(yscrollcommand=lb_sb.set)
-        lb_sb.pack(side="right", fill="y")
-        s.lb.pack(side="left", fill="both", expand=True)
-
-        giris_f = ttk.Frame(govde)
-        giris_f.pack(fill="x", pady=(8, 4))
+        s.lb = tk.Listbox(s, width=40, height=18)
+        s.lb.grid(row=1, column=0, columnspan=2, padx=6)
         s.e = tk.StringVar()
-        ttk.Entry(giris_f, textvariable=s.e, width=32).pack(side="left", fill="x", expand=True, padx=(0, 6))
-        ttk.Button(giris_f, text="Ekle", command=s.ekle, style="Accent.TButton").pack(side="left")
-
-        btn_f = ttk.Frame(govde)
-        btn_f.pack(fill="x", pady=6)
-        ttk.Button(btn_f, text="Seçileni Sil", command=s.sil, style="Danger.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(btn_f, text="Toplu Ekle", command=s.toplu).pack(side="left", padx=6)
-        ttk.Button(btn_f, text="Benzer Adları Birleştir", command=s.birlestir).pack(side="right")
+        ttk.Entry(s, textvariable=s.e, width=30).grid(row=2, column=0, pady=4)
+        ttk.Button(s, text="Ekle", command=s.ekle).grid(row=2, column=1)
+        ttk.Button(s, text="Seçileni Sil", command=s.sil).grid(row=3, column=0, pady=4)
+        ttk.Button(s, text="Toplu Ekle", command=s.toplu).grid(row=3, column=1)
+        ttk.Button(s, text="Benzer adları birleştir", command=s.birlestir).grid(row=4, column=0, columnspan=2, pady=(2, 10))
         s.yenile()
 
     def kod(s):
@@ -735,16 +826,9 @@ class Listeler(tk.Toplevel):
 
     def toplu(s):
         w = tk.Toplevel(s)
-        koyu = s.app.koyu_var.get()
-        pal = modern_tasarim.tema_uygula(w, koyu)
-        w.title("Toplu Değer Ekle")
-        modern_tasarim.pencere_merkeze_yerlestir(w, 480, 440)
-        modern_tasarim.ozel_baslik(w, "Toplu Liste Değeri Ekle", koyu, "Her satıra bir değer yapıştırın")
-        govde = ttk.Frame(w, padding=14)
-        govde.pack(fill="both", expand=True)
-        t = tk.Text(govde, width=40, height=14, bg=pal["kart"], fg=pal["metin"],
-                    highlightthickness=1, highlightbackground=pal["kenar"], relief="flat")
-        t.pack(fill="both", expand=True, pady=(0, 10))
+        w.title("Her satıra bir değer yapıştırın")
+        t = tk.Text(w, width=40, height=20)
+        t.pack(padx=6, pady=6)
 
         def tamam():
             for satir in t.get("1.0", "end").splitlines():
@@ -752,10 +836,7 @@ class Listeler(tk.Toplevel):
                     q("INSERT OR IGNORE INTO liste VALUES (?,?)", (s.kod(), satir.strip()))
             w.destroy()
             s.yenile()
-        alt = ttk.Frame(govde)
-        alt.pack(fill="x")
-        ttk.Button(alt, text="Listeye Ekle", command=tamam, style="Accent.TButton").pack(side="right", padx=4)
-        ttk.Button(alt, text="İptal", command=w.destroy).pack(side="right")
+        ttk.Button(w, text="Ekle", command=tamam).pack(pady=6)
 
 
 YEDEK_DESEN = re.compile(r"^imar_kayitlari_\d{4}-\d{2}-\d{2}\.db$")
@@ -1097,34 +1178,18 @@ class Silinenler(tk.Toplevel):
     def __init__(s, app):
         super().__init__(app.root)
         s.app = app
-        koyu = s.app.koyu_var.get()
-        modern_tasarim.tema_uygula(s, koyu)
-        s.title("Son Silinenler (Geri Dönüşüm Kutusu)")
-        modern_tasarim.pencere_merkeze_yerlestir(s, 1040, 580)
-        s.minsize(820, 440)
-        modern_tasarim.ozel_baslik(s, "Geri Dönüşüm Kutusu • Silinen Kayıtlar", koyu, "Silinen kayıtlar 90 gün boyunca saklanır")
-
-        govde = ttk.Frame(s, padding=(14, 10))
-        govde.pack(fill="both", expand=True)
-
-        kap = ttk.Frame(govde)
-        kap.pack(fill="both", expand=True, pady=(0, 8))
-        s.tv = ttk.Treeview(kap, columns=[k for k, _ in s.SUTUN], show="headings", selectmode="extended")
-        sb = ttk.Scrollbar(kap, orient="vertical", command=s.tv.yview)
-        s.tv.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        s.tv.pack(side="left", fill="both", expand=True)
-
+        s.title("Son Silinenler (90 gün saklanır)")
+        s.geometry("940x460")
+        s.tv = ttk.Treeview(s, columns=[k for k, _ in s.SUTUN], show="headings", selectmode="extended")
         for k, ad in s.SUTUN:
             s.tv.heading(k, text=ad)
             s.tv.column(k, width=140 if k == "silinme" else 110)
-
-        alt = ttk.Frame(govde)
-        alt.pack(fill="x")
+        s.tv.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+        alt = ttk.Frame(s)
+        alt.pack(fill="x", padx=10, pady=(0, 10))
         ttk.Button(alt, text="Geri Getir", style="Accent.TButton", command=s.geri).pack(side="left")
         ttk.Button(alt, text="Kalıcı Sil", style="Danger.TButton", command=s.kalici).pack(side="left", padx=8)
-        ttk.Label(alt, text="Ctrl / Shift ile birden çok satır seçebilirsiniz.", style="Sub.TLabel").pack(side="left", padx=10)
-        ttk.Button(alt, text="Kapat", command=s.destroy).pack(side="right")
+        ttk.Label(alt, text="Ctrl/Shift ile birden çok satır seçebilirsiniz.").pack(side="left", padx=10)
         s.yenile()
 
     def yenile(s):
@@ -1182,42 +1247,27 @@ class TopluGuncelle(tk.Toplevel):
     def __init__(s, app, ids):
         super().__init__(app.root)
         s.app, s.ids = app, ids
-        koyu = s.app.koyu_var.get()
-        modern_tasarim.tema_uygula(s, koyu)
         s.title(f"Toplu Güncelle ({len(ids)} kayıt)")
-        modern_tasarim.pencere_merkeze_yerlestir(s, 720, 560)
-        s.minsize(620, 480)
-        modern_tasarim.ozel_baslik(s, f"Toplu Güncelleme • {len(ids)} Kayıt Seçili", koyu, "Seçili kayıtlarda yalnızca işaretlenen alanlar güncellenir")
-
         s.sec, s.var = {}, {}
         tur = {f[0]: f[2] for f in FIELDS}
-
-        govde = ttk.Frame(s, padding=(18, 12))
-        govde.pack(fill="both", expand=True)
-
-        bilgi = ttk.Label(govde, text=f"{len(ids)} kayıtta yalnızca işaretlediğiniz alanlar değiştirilir.\n"
-                                     "(Değer yazınca kutu kendiliğinden işaretlenir; boş bırakıp işaretlerseniz alan temizlenir.)",
-                          style="Sub.TLabel", wraplength=660)
-        bilgi.grid(row=0, column=0, columnspan=3, padx=4, pady=(0, 10), sticky="w")
-
+        ttk.Label(s, text=f"{len(ids)} kayıtta yalnızca işaretlediğiniz alanlar değiştirilir.\n"
+                          "(Değer yazınca kutu kendiliğinden işaretlenir; boş değerle işaretlerseniz alan temizlenir.)"
+                  ).grid(row=0, column=0, columnspan=3, padx=12, pady=(12, 8), sticky="w")
         for i, k in enumerate(s.ALANLAR, 1):
             s.sec[k] = tk.BooleanVar(value=False)
             s.var[k] = tk.StringVar()
-            ttk.Checkbutton(govde, text=LAB[k], variable=s.sec[k]).grid(row=i, column=0, sticky="w", padx=6, pady=4)
+            ttk.Checkbutton(s, text=LAB[k], variable=s.sec[k]).grid(row=i, column=0, sticky="w", padx=12, pady=4)
             if tur[k] and tur[k].startswith("liste:"):
-                w = AramaliCombobox(govde, (lambda t2=tur[k][6:]: liste(t2)), textvariable=s.var[k], width=32)
+                w = AramaliCombobox(s, (lambda t2=tur[k][6:]: liste(t2)), textvariable=s.var[k], width=30)
             else:
-                w = ttk.Entry(govde, textvariable=s.var[k], width=35)
-            w.grid(row=i, column=1, padx=6, pady=4, sticky="w")
+                w = ttk.Entry(s, textvariable=s.var[k], width=33)
+            w.grid(row=i, column=1, padx=6, pady=4)
             s.var[k].trace_add("write", lambda *a, k=k: s.sec[k].set(True))
             if k in DATES:
-                ttk.Button(govde, text="Takvim", command=lambda k=k: Takvim(s, s.var[k].get(), DATES[k], s.var[k].set)
-                           ).grid(row=i, column=2, padx=6, sticky="w")
-
-        alt_bar = ttk.Frame(s, padding=(18, 10))
-        alt_bar.pack(fill="x", side="bottom")
-        ttk.Button(alt_bar, text="Değişiklikleri Uygula", style="Accent.TButton", command=s.uygula).pack(side="right", padx=6)
-        ttk.Button(alt_bar, text="İptal", command=s.destroy).pack(side="right")
+                ttk.Button(s, text="Takvim", command=lambda k=k: Takvim(s, s.var[k].get(), DATES[k], s.var[k].set)
+                           ).grid(row=i, column=2, padx=6)
+        ttk.Button(s, text="Uygula", style="Accent.TButton", command=s.uygula).grid(
+            row=len(s.ALANLAR) + 1, column=1, pady=14)
 
     def uygula(s):
         sec = [k for k in s.ALANLAR if s.sec[k].get()]
@@ -1243,35 +1293,24 @@ class RaporAyar(tk.Toplevel):
 
     def __init__(s, app):
         super().__init__(app.root)
-        is_dark = app.koyu_var.get() if hasattr(app, "koyu_var") else KOYU
-        modern_tasarim.tema_uygula(s, is_dark)
         s.title("Rapor başlığı ve imza ayarları")
-        modern_tasarim.pencere_merkeze_yerlestir(s, 720, 540)
-        s.minsize(620, 460)
-        modern_tasarim.ozel_baslik(s, "Rapor Başlığı ve İmza Ayarları", is_dark, "Resmi çıktı ve raporlarda yer alacak kurum bilgileri")
-
-        govde = ttk.Frame(s, padding=(18, 14))
-        govde.pack(fill="both", expand=True)
-
         s.v = {}
         for i, (k, ad) in enumerate(s.ALANLAR):
-            ttk.Label(govde, text=ad).grid(row=i, column=0, sticky="e", padx=(6, 10), pady=4)
+            ttk.Label(s, text=ad).grid(row=i, column=0, sticky="e", padx=(14, 6), pady=4)
             s.v[k] = tk.StringVar(value=ayar("rapor_" + k))
-            ttk.Entry(govde, textvariable=s.v[k], width=48).grid(row=i, column=1, columnspan=2, sticky="w", pady=4)
+            ttk.Entry(s, textvariable=s.v[k], width=52).grid(row=i, column=1, columnspan=2, sticky="w", pady=4)
         n = len(s.ALANLAR)
-        ttk.Label(govde, text="Logo (isteğe bağlı)").grid(row=n, column=0, sticky="e", padx=(6, 10), pady=4)
+        ttk.Label(s, text="Logo (isteğe bağlı)").grid(row=n, column=0, sticky="e", padx=(14, 6), pady=4)
         s.v["logo"] = tk.StringVar(value=ayar("rapor_logo"))
-        ttk.Entry(govde, textvariable=s.v["logo"], width=38).grid(row=n, column=1, sticky="w", pady=4)
-        ttk.Button(govde, text="Dosya Seç", command=s.logo_sec).grid(row=n, column=2, sticky="w", padx=6)
+        ttk.Entry(s, textvariable=s.v["logo"], width=44).grid(row=n, column=1, sticky="w", pady=4)
+        ttk.Button(s, text="Seç", command=s.logo_sec).grid(row=n, column=2, sticky="w", padx=6)
         s.imza = tk.BooleanVar(value=ayar("rapor_imza") != "0")
-        ttk.Checkbutton(govde, text="Raporun altına imza alanı ekle (Hazırlayan / Onaylayan)", variable=s.imza).grid(
-            row=n + 1, column=1, columnspan=2, sticky="w", pady=(8, 4))
-
-        alt = ttk.Frame(s, padding=(18, 10))
-        alt.pack(fill="x", side="bottom")
-        ttk.Button(alt, text="Kaydet", style="Accent.TButton", command=s.kaydet).pack(side="right", padx=6)
-        ttk.Button(alt, text="Örnek Önizleme", command=s.onizle).pack(side="right", padx=6)
-        ttk.Button(alt, text="Kapat", command=s.destroy).pack(side="left")
+        ttk.Checkbutton(s, text="Raporun altına imza alanı ekle (Hazırlayan / Onaylayan)", variable=s.imza).grid(
+            row=n + 1, column=1, columnspan=2, sticky="w", pady=6)
+        alt = ttk.Frame(s)
+        alt.grid(row=n + 2, column=0, columnspan=3, pady=(6, 12))
+        ttk.Button(alt, text="Kaydet", style="Accent.TButton", command=s.kaydet).pack(side="left", padx=6)
+        ttk.Button(alt, text="Önizleme", command=s.onizle).pack(side="left", padx=6)
 
     def logo_sec(s):
         p = filedialog.askopenfilename(title="Logo seçin (PNG veya JPG)", filetypes=[("Resim", "*.png *.jpg *.jpeg")])
@@ -1291,48 +1330,46 @@ class RaporAyar(tk.Toplevel):
 
 
 class FenIslemDialog(tk.Toplevel):
-    """Elle fen işlemi: eski ve yeni parseller kendi yazım biçiminizle girilir (örn. 728/1-2-9-10 -> 728/13)."""
+    """Fen işlemi ekle / düzenle: eski ve yeni parseller kendi yazım biçiminizle girilir (örn. 728/1-2-9-10 -> 728/13)."""
     TURLER = ["Tevhit", "İfraz", "Tevhit-İfraz", "Yola terk", "İhdas", "İhdas-Tevhit", "Diğer"]
 
-    def __init__(s, app):
+    def __init__(s, app, kayit=None):
         super().__init__(app.root)
-        s.app = app
-        is_dark = s.app.koyu_var.get() if hasattr(s.app, "koyu_var") else KOYU
-        modern_tasarim.tema_uygula(s, is_dark)
-        s.title("Fen işlemi ekle")
-        modern_tasarim.pencere_merkeze_yerlestir(s, 700, 540)
-        s.minsize(600, 480)
-        modern_tasarim.ozel_baslik(s, "Yeni Fen İşlemi Tanımla", is_dark, "Parsel Dönüşüm, Tevhit, İfraz ve Değişiklik Kaydı")
-
-        govde = ttk.Frame(s, padding=(18, 14))
-        govde.pack(fill="both", expand=True)
-
+        s.app, s.kayit = app, kayit
+        s.title("Fen işlemini düzenle" if kayit else "Fen işlemi ekle")
         s.v = {k: tk.StringVar() for k in ("mahalle", "tur", "tarih", "eski", "yeni", "not")}
-        ttk.Label(govde, text="Mahalle").grid(row=0, column=0, sticky="e", padx=(6, 10), pady=5)
-        AramaliCombobox(govde, lambda: liste("mahalle"), textvariable=s.v["mahalle"], width=34).grid(row=0, column=1, sticky="w")
-        ttk.Label(govde, text="İşlem türü").grid(row=1, column=0, sticky="e", padx=(6, 10), pady=5)
-        ttk.Combobox(govde, textvariable=s.v["tur"], values=s.TURLER, width=34).grid(row=1, column=1, sticky="w")
-        ttk.Label(govde, text="İşlem tarihi").grid(row=2, column=0, sticky="e", padx=(6, 10), pady=5)
-        ttk.Entry(govde, textvariable=s.v["tarih"], width=36).grid(row=2, column=1, sticky="w")
-        ttk.Button(govde, text="Takvim", command=lambda: Takvim(s, s.v["tarih"].get(), ".", s.v["tarih"].set)).grid(row=2, column=2, padx=6)
+        ttk.Label(s, text="Mahalle").grid(row=0, column=0, sticky="e", padx=(14, 6), pady=5)
+        AramaliCombobox(s, lambda: liste("mahalle"), textvariable=s.v["mahalle"], width=34).grid(row=0, column=1, sticky="w")
+        ttk.Label(s, text="İşlem türü").grid(row=1, column=0, sticky="e", padx=(14, 6), pady=5)
+        ttk.Combobox(s, textvariable=s.v["tur"], values=s.TURLER, width=34).grid(row=1, column=1, sticky="w")
+        ttk.Label(s, text="İşlem tarihi").grid(row=2, column=0, sticky="e", padx=(14, 6), pady=5)
+        ttk.Entry(s, textvariable=s.v["tarih"], width=36).grid(row=2, column=1, sticky="w")
+        ttk.Button(s, text="Takvim", command=lambda: Takvim(s, s.v["tarih"].get(), ".", s.v["tarih"].set)).grid(row=2, column=2, padx=6)
         s.ipucu = {}
         for r, (k, ad) in enumerate((("eski", "Eski parseller"), ("yeni", "Yeni parseller")), 3):
-            ttk.Label(govde, text=ad).grid(row=r * 2 - 2, column=0, sticky="e", padx=(6, 10), pady=(5, 0))
-            ttk.Entry(govde, textvariable=s.v[k], width=36).grid(row=r * 2 - 2, column=1, sticky="w", pady=(5, 0))
-            s.ipucu[k] = ttk.Label(govde, text="", foreground=SOLUK)
+            ttk.Label(s, text=ad).grid(row=r * 2 - 2, column=0, sticky="e", padx=(14, 6), pady=(5, 0))
+            ttk.Entry(s, textvariable=s.v[k], width=36).grid(row=r * 2 - 2, column=1, sticky="w", pady=(5, 0))
+            s.ipucu[k] = ttk.Label(s, text="", foreground=SOLUK)
             s.ipucu[k].grid(row=r * 2 - 1, column=1, sticky="w")
             s.v[k].trace_add("write", lambda *a, k=k: s.ipucu[k].config(text=s.oku(k)))
-        ttk.Label(govde, text="Açıklama").grid(row=7, column=0, sticky="e", padx=(6, 10), pady=5)
-        ttk.Entry(govde, textvariable=s.v["not"], width=36).grid(row=7, column=1, sticky="w")
-
-        alt = ttk.Frame(s, padding=(18, 10))
-        alt.pack(fill="x", side="bottom")
-        ttk.Button(alt, text="Kaydet", style="Accent.TButton", command=s.kaydet).pack(side="right", padx=6)
-        ttk.Button(alt, text="İptal", command=s.destroy).pack(side="right")
+        ttk.Label(s, text="Açıklama").grid(row=7, column=0, sticky="e", padx=(14, 6), pady=5)
+        ttk.Entry(s, textvariable=s.v["not"], width=36).grid(row=7, column=1, sticky="w")
+        ttk.Button(s, text="Kaydet", style="Accent.TButton", command=s.kaydet).grid(row=8, column=1, pady=14, sticky="w")
+        if kayit:
+            s.v["mahalle"].set(kayit["mahalle"])
+            s.v["tur"].set(kayit["tur"])
+            s.v["tarih"].set(kayit["tarih"])
+            s.v["eski"].set(", ".join(parsel_etiket(a, p) for a, p in kayit["eski"]))
+            s.v["yeni"].set(", ".join(parsel_etiket(a, p) for a, p in kayit["yeni"]))
+            s.v["not"].set(kayit["aciklama"])
+            if kayit["kaynak"] == "TKGM":
+                ttk.Label(s, foreground=SOLUK, wraplength=430, justify="left", text="Bu kayıt Parsel Sorgu sonucundan oluşmuştu. "
+                          "Elle kaydederseniz bundan sonra otomatik güncellenmez ('TKGM sonucuna dön' ile geri alabilirsiniz)."
+                          ).grid(row=9, column=0, columnspan=3, padx=14, pady=(0, 12), sticky="w")
 
     def oku(s, k):
-        o = parsel_ozeti(s.v[k].get())
-        return o or ("" if not parselleri_coz(s.v[k].get()) else "Algılanan: " + ", ".join(parsel_etiket(a, p) for a, p in parselleri_coz(s.v[k].get())))
+        liste_ = parselleri_coz(s.v[k].get())
+        return parsel_ozeti(s.v[k].get()) or ("Algılanan: " + ", ".join(parsel_etiket(a, p) for a, p in liste_) if liste_ else "")
 
     def kaydet(s):
         mah = s.v["mahalle"].get().strip()
@@ -1340,11 +1377,183 @@ class FenIslemDialog(tk.Toplevel):
         if not mah or not (eski or yeni):
             messagebox.showwarning("Eksik bilgi", "Mahalle ile eski ve/veya yeni parsel yazılmalı.", parent=s)
             return
-        fen_kayit_ekle(mah, s.v["tur"].get().strip(), tarih_bicim(s.v["tarih"].get()), eski, yeni, "Elle", None, s.v["not"].get().strip())
+        tur, tarih, aciklama = s.v["tur"].get().strip(), tarih_bicim(s.v["tarih"].get()), s.v["not"].get().strip()
+        if s.kayit:
+            fen_kayit_guncelle(s.kayit["id"], mah, tur, tarih, eski, yeni, aciklama, kilit=1 if s.kayit["kaynak"] == "TKGM" else None)
+        else:
+            fen_kayit_ekle(mah, tur, tarih, eski, yeni, "Elle", None, aciklama)
         q("INSERT OR IGNORE INTO liste VALUES ('mahalle',?)", (mah,))
         if any(s.app.fen_son):
             s.app.fen_ara()
         s.destroy()
+
+
+class ZincirDetay(tk.Toplevel):
+    """Parsel Sorgu'daki 'hareket listesi' gibi Özet / Tablo / Grafik. Veriler İş Takip veritabanından gelir (ağ isteği yok)."""
+
+    def __init__(s, app, k):
+        super().__init__(app.root)
+        s.k = k
+        s.z = zincir_coz(k.get("zincir"))
+        ilk = f"{k['eski'][0][0]}/{k['eski'][0][1]}" if k.get("eski") else ""
+        s.no = (s.z["kok"]["no"] if s.z else "") or k.get("parsel_no") or ilk
+        s.title(f"{no_etiket(s.no)} parsel hareket listesi")
+        s.geometry("900x560")
+        tk.Label(s, text=f"{no_etiket(s.no)} parsel hareket listesi  ·  {k.get('mahalle') or ''}", bg=VURGU_K, fg="#ffffff",
+                 font=("Segoe UI", 14), anchor="w", padx=16, pady=11).pack(fill="x")
+        nb = ttk.Notebook(s)
+        nb.pack(fill="both", expand=True)
+        o, tb, g = ttk.Frame(nb), ttk.Frame(nb), ttk.Frame(nb)
+        for f, ad in ((o, "Özet"), (tb, "Tablo"), (g, "Grafik")):
+            nb.add(f, text=ad)
+        s._ozet(o)
+        s._tablo(tb)
+        s._grafik(g)
+
+    def _liste(s, anahtar):
+        return ", ".join(parsel_etiket(a, p) for a, p in s.k.get(anahtar, [])) or "–"
+
+    def _ozet(s, f):
+        k = s.k
+        mesaj = k.get("aciklama") or ("Bu taşınmaz pasife alınmıştır." if k.get("durum") == "Pasif" else "Bu parsel aktif görünüyor.")
+        tk.Label(f, text=mesaj, bg=KART, fg=METIN, wraplength=800, justify="center", padx=16, pady=18, relief="solid", bd=1
+                 ).pack(fill="x", padx=18, pady=(18, 10))
+        yeni_say = len(k.get("yeni", []))
+        satir = [("Mahalle", k.get("mahalle") or "–"), ("Sorgulanan parsel", no_etiket(s.no) or "–"),
+                 ("Alan (m²) / Nitelik", f"{k.get('alan') or '–'} / {k.get('nitelik') or '–'}"),
+                 ("İşlem", f"{k.get('tur') or '–'}  ({k.get('tarih') or '–'})"),
+                 ("Eski parseller (iş kaydı + sorgu)", s._liste("eski")), (f"Yeni (aktif) parseller ({yeni_say} adet)", s._liste("yeni")),
+                 ("Kaynak", (k.get("kaynak") or "–") + (f"  ·  iş #{k['work_id']}" if k.get("work_id") else ""))]
+        for ad, v in satir:
+            fr = ttk.Frame(f)
+            fr.pack(fill="x", padx=24, pady=3)
+            ttk.Label(fr, text=ad + ":", width=34, font=("Segoe UI", 10, "bold")).pack(side="left")
+            ttk.Label(fr, text=v, wraplength=520, justify="left").pack(side="left")
+
+    def _tablo(s, f):
+        cols = ("parsel", "durum", "alan", "nitelik", "tur", "tarih", "aciklama")
+        tv = ttk.Treeview(f, columns=cols, show="headings", height=12)
+        for c, ad, w in (("parsel", "Parsel", 110), ("durum", "Durum", 80), ("alan", "Alan (m²)", 90), ("nitelik", "Nitelik", 110),
+                         ("tur", "İşlem türü", 130), ("tarih", "İşlem tarihi", 100), ("aciklama", "Açıklama", 260)):
+            tv.heading(c, text=ad)
+            tv.column(c, width=w, anchor="w")
+        tv.tag_configure("Pasif", foreground=SOLUK)
+        tv.tag_configure("Pasif*", foreground=SOLUK)
+        var = set()
+        if s.z:
+            for p in [s.z["kok"]] + list(s.z.get("devam", [])):
+                tv.insert("", "end", tags=(p.get("durum") or "",), values=(no_etiket(p["no"]), p.get("durum") or "–", p.get("alan") or "–",
+                          p.get("nitelik") or "–", p.get("islem_turu") or "–", p.get("islem_tarihi") or "–", p.get("aciklama") or "–"))
+                var.add(p["no"])
+            if "tevhit" in tr_lower(s.z["kok"].get("islem_turu")):
+                for a, pr in s.k.get("eski", []):
+                    if f"{a}/{pr}" not in var:
+                        tv.insert("", "end", tags=("Pasif*",), values=(f"{parsel_etiket(a, pr)}*", "Pasif*", "–", "–", "–", "–",
+                                  "İş kaydında yazılı; sorgulanmadı, tevhitle birleşmiş sayıldı"))
+        else:
+            for a, pr in s.k.get("eski", []):
+                tv.insert("", "end", tags=("Pasif",), values=(parsel_etiket(a, pr), "Pasif", "–", "–", s.k.get("tur") or "–", s.k.get("tarih") or "–", "–"))
+            for a, pr in s.k.get("yeni", []):
+                tv.insert("", "end", values=(parsel_etiket(a, pr), "Aktif", "–", "–", "–", "–", "–"))
+        tv.pack(fill="both", expand=True, padx=12, pady=12)
+
+    def _grafik(s, f):
+        s.cv = tk.Canvas(f, bg=KART, highlightthickness=0)
+        s.cv.pack(fill="both", expand=True)
+        s.cv.bind("<Configure>", lambda e: s.ciz())
+        s.ciz()
+
+    def ciz(s):
+        dugum, kenar = zincir_modeli(s.z, s.k.get("eski", []), s.k.get("yeni", []))
+        zincir_grafik_ciz(s.cv, dugum, kenar, s.no)
+
+
+class PasifListe(tk.Toplevel):
+    """Pasife düşen parsellerin listesi (Parsel Sorgu'daki liste gibi): alan, nitelik, yeni parseller, işlem. Çift tık: hareket listesi."""
+
+    def __init__(s, app):
+        super().__init__(app.root)
+        s.app = app
+        s.title("Pasif Parseller")
+        s.geometry("1280x560")
+        s.kayitlar = {}
+        ust = ttk.Frame(s)
+        ust.pack(fill="x", padx=12, pady=(12, 4))
+        ttk.Label(ust, text="Ara:").pack(side="left")
+        s.ara = tk.StringVar()
+        ttk.Entry(ust, textvariable=s.ara, width=26).pack(side="left", padx=6)
+        s.ara.trace_add("write", lambda *a: s.yukle())
+        s.sadece = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ust, text="Yalnız onay bekleyenler", variable=s.sadece, command=s.yukle).pack(side="left", padx=10)
+        ttk.Button(ust, text="Seçili parseli onayla", command=s.onayla).pack(side="left", padx=4)
+        ttk.Button(ust, text="Yenile", command=s.yukle).pack(side="left", padx=4)
+        s.say = ttk.Label(ust, text="", foreground=SOLUK)
+        s.say.pack(side="right")
+        ttk.Label(s, foreground=SOLUK, text="Parsel Sorgu'da pasif çıkan parseller. Satıra çift tıklayınca hareket listesi (özet, tablo, grafik) açılır. "
+                  "İş 'Tescillendi' yapılınca onay uyarısı kendiliğinden kalkar; kayıt burada ve Fen Klasörü'nde durur.").pack(anchor="w", padx=14)
+        kap = ttk.Frame(s)
+        kap.pack(fill="both", expand=True, padx=12, pady=8)
+        cols = ("onay", "mahalle", "parsel", "alan", "nitelik", "yeni", "islem", "is", "isdurum", "kontrol")
+        s.tv = ttk.Treeview(kap, columns=cols, show="headings", selectmode="extended")
+        for c, ad, w in (("onay", "Onay", 90), ("mahalle", "Mahalle", 130), ("parsel", "Sorgulanan parsel", 120), ("alan", "Alan (m²)", 90),
+                         ("nitelik", "Nitelik", 120), ("yeni", "Yeni (aktif) parseller", 220), ("islem", "İşlem", 170),
+                         ("is", "İş no", 60), ("isdurum", "İş durumu", 130), ("kontrol", "Son kontrol", 120)):
+            s.tv.heading(c, text=ad)
+            s.tv.column(c, width=w, anchor="w")
+        s.tv.tag_configure("bek", foreground=KIRMIZI)
+        sb = ttk.Scrollbar(kap, orient="vertical", command=s.tv.yview)
+        s.tv.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        s.tv.pack(side="left", fill="both", expand=True)
+        s.tv.bind("<Double-1>", lambda e: s.detay())
+        s.yukle()
+
+    def yukle(s):
+        pk = parsel_kontrol_oku()
+        isler = {i: (mh, ap, on) for i, mh, ap, on in q("SELECT id, mahalle, ada_parsel, onay FROM kayit")}
+        aranan = tr_lower(s.ara.get().strip())
+        satirlar = []
+        for wid, p in pk.items():
+            if p["durum"] != "Pasif" or (s.sadece.get() and not p["onay"]):
+                continue
+            mh, ap, jonay = isler.get(wid, ("", "", ""))
+            yeni_metin = p["nihai"] or p["yeni"] or ""
+            if aranan and aranan not in tr_lower(" ".join([mh or "", ap or "", p["parsel_no"] or "", yeni_metin, p["nitelik"] or ""])):
+                continue
+            satirlar.append((tarih_oku(p["islem_tarihi"]) or datetime.date.min, wid, p, mh, ap, jonay, yeni_metin))
+        satirlar.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        for i in s.tv.get_children():
+            s.tv.delete(i)
+        s.kayitlar = {}
+        for _, wid, p, mh, ap, jonay, yeni_metin in satirlar:
+            eski = parselleri_coz(ap)
+            for x in parselleri_coz(p["parsel_no"]):
+                if x not in eski:
+                    eski.append(x)
+            iid = str(wid)
+            s.kayitlar[iid] = {"mahalle": mh or "", "tur": p["islem_turu"], "tarih": p["islem_tarihi"], "aciklama": p["aciklama"],
+                               "alan": p["alan"], "nitelik": p["nitelik"], "eski": eski, "yeni": parselleri_coz(yeni_metin),
+                               "zincir": p["zincir"], "durum": "Pasif", "kaynak": "TKGM", "work_id": wid, "parsel_no": p["parsel_no"]}
+            s.tv.insert("", "end", iid=iid, tags=("bek",) if p["onay"] else (), values=(
+                "⚠ Bekliyor" if p["onay"] else "Onaylandı", mh or "(iş silinmiş)", no_etiket(p["parsel_no"]), p["alan"] or "–",
+                p["nitelik"] or "–", yeni_metin.replace("; ", ", ") or "–", f"{p['islem_turu']} {p['islem_tarihi']}".strip() or "–",
+                f"#{wid}", jonay or "–", (p["son_kontrol"] or "").replace("T", " ")[:16]))
+        bek = sum(1 for _, _, p, *_ in satirlar if p["onay"])
+        s.say.config(text=f"{len(satirlar)} pasif parsel · {bek} onay bekliyor")
+
+    def onayla(s):
+        sec = [int(i) for i in s.tv.selection()]
+        if not sec:
+            messagebox.showinfo("Uyarı", "Önce satır(lar)ı seçin.", parent=s)
+            return
+        n = s.app.parsel_onay_kaldir(sec)
+        s.yukle()
+        s.say.config(text=f"{n} kayıt onaylandı")
+
+    def detay(s):
+        sec = s.tv.selection()
+        if sec and sec[0] in s.kayitlar:
+            ZincirDetay(s.app, s.kayitlar[sec[0]])
 
 
 class TarihAraligi:
@@ -1633,20 +1842,16 @@ def mukerrer(d, rid):
     return ""
 
 
-TEMA_ACIK = {
-    "BG": "#F1F5F9", "KART": "#FFFFFF", "VURGU": "#2563EB", "VURGU_K": "#1D4ED8", "METIN": "#0F172A",
-    "SOLUK": "#64748B", "KENAR": "#CBD5E1", "BASLIK": "#E2E8F0", "HOV": "#DBEAFE", "BAS": "#BFDBFE",
-    "SEC": "#BFDBFE", "SB": "#CBD5E1", "SBH": "#94A3B8", "TEHL": "#FEE2E2", "KIRMIZI": "#DC2626",
-    "BHOV": "#DBEAFE", "TAKV1": "#DBEAFE", "TAKV2": "#EFF6FF",
-    "FEN_ESKI": "#B45309", "FEN_YENI": "#15803D"
-}
-TEMA_KOYU = {
-    "BG": "#0B1120", "KART": "#1E293B", "VURGU": "#3B82F6", "VURGU_K": "#2563EB", "METIN": "#F8FAFC",
-    "SOLUK": "#94A3B8", "KENAR": "#334155", "BASLIK": "#334155", "HOV": "#1E293B", "BAS": "#1E3A8A",
-    "SEC": "#1E3A8A", "SB": "#475569", "SBH": "#64748B", "TEHL": "#451A1A", "KIRMIZI": "#EF4444",
-    "BHOV": "#334155", "TAKV1": "#1E3A8A", "TAKV2": "#243B6B",
-    "FEN_ESKI": "#FBBF24", "FEN_YENI": "#4ADE80"
-}
+TEMA_ACIK = {"BG": "#f4f6fa", "KART": "#ffffff", "VURGU": "#2563eb", "VURGU_K": "#1d4ed8", "METIN": "#1f2937",
+             "SOLUK": "#6b7280", "KENAR": "#d9dee8", "BASLIK": "#e8edf6", "HOV": "#eaf0fb", "BAS": "#dbe5f7",
+             "SEC": "#bfdbfe", "SB": "#c5ccd8", "SBH": "#a9b2c3", "TEHL": "#fdecec", "KIRMIZI": "#b91c1c",
+             "BHOV": "#dde6f4", "TAKV1": "#dbeafe", "TAKV2": "#e8f0fe",
+             "FEN_ESKI": "#b45309", "FEN_YENI": "#15803d"}
+TEMA_KOYU = {"BG": "#111827", "KART": "#1f2937", "VURGU": "#3b82f6", "VURGU_K": "#2563eb", "METIN": "#e5e7eb",
+             "SOLUK": "#9ca3af", "KENAR": "#374151", "BASLIK": "#273449", "HOV": "#2b3a52", "BAS": "#34476a",
+             "SEC": "#1e40af", "SB": "#4b5563", "SBH": "#6b7280", "TEHL": "#3b1d1d", "KIRMIZI": "#f87171",
+             "BHOV": "#334155", "TAKV1": "#1e3a8a", "TAKV2": "#243b6b",
+             "FEN_ESKI": "#fbbf24", "FEN_YENI": "#4ade80"}
 # Ekrandaki durum renkleri (raporlar/yazdırma her zaman açık DURUM_RENK'i kullanır)
 DURUM_UI_ACIK = dict(DURUM_RENK)
 DURUM_UI_KOYU = {"Tescilde Bekliyor": "#1d4a2e", "Ödeme Bekleniyor": "#5a4a12", "Encümene Girdi": "#1e3a6b",
@@ -1676,10 +1881,55 @@ RENK = ["#2563eb", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec48
 
 
 def tema_kur(root):
-    modern_tasarim.tema_uygula(root, KOYU)
-
-
-KART_RENK = {"acik": "mavi", "encumen": "yesil", "gecik": "kirmizi", "harc": "turuncu", "parsel": "mor"}
+    root.configure(bg=BG)
+    for ad, v in [("*Font", FONT), ("*Toplevel.background", BG), ("*Listbox.background", KART),
+                  ("*Listbox.selectBackground", VURGU), ("*Listbox.selectForeground", "white"),
+                  ("*Listbox.relief", "flat"), ("*Listbox.highlightThickness", 1), ("*Listbox.highlightColor", KENAR),
+                  ("*Listbox.highlightBackground", KENAR), ("*Text.background", KART), ("*Text.relief", "flat"),
+                  ("*Menu.background", KART), ("*Menu.activeBackground", VURGU), ("*Menu.activeForeground", "white"),
+                  ("*TCombobox*Listbox.background", KART), ("*TCombobox*Listbox.selectBackground", VURGU),
+                  ("*TCombobox*Listbox.selectForeground", "white"),
+                  ("*Listbox.foreground", METIN), ("*TCombobox*Listbox.foreground", METIN),
+                  ("*Text.foreground", METIN), ("*Menu.foreground", METIN), ("*Menu.selectColor", VURGU)]:
+        root.option_add(ad, v)
+    st = ttk.Style()
+    st.theme_use("clam")
+    st.configure(".", background=BG, foreground=METIN, font=FONT, bordercolor=KENAR, focuscolor=BG)
+    st.configure("TFrame", background=BG)
+    st.configure("TLabel", background=BG, foreground=METIN)
+    st.configure("TButton", background=KART, foreground=METIN, bordercolor=KENAR, lightcolor=KART, darkcolor=KART,
+                 padding=(12, 6), relief="flat", borderwidth=1)
+    st.map("TButton", background=[("active", HOV), ("pressed", BAS)])
+    st.configure("Accent.TButton", background=VURGU, foreground="white", bordercolor=VURGU, lightcolor=VURGU, darkcolor=VURGU)
+    st.map("Accent.TButton", background=[("active", VURGU_K), ("pressed", VURGU_K)], foreground=[("active", "white")])
+    st.configure("Danger.TButton", foreground=KIRMIZI)
+    st.map("Danger.TButton", background=[("active", TEHL)])
+    st.configure("TMenubutton", background=KART, foreground=METIN, bordercolor=KENAR, padding=(12, 6), relief="flat",
+                 arrowcolor=SOLUK)
+    st.map("TMenubutton", background=[("active", HOV)])
+    st.configure("TEntry", fieldbackground=KART, foreground=METIN, insertcolor=METIN, bordercolor=KENAR,
+                 lightcolor=KENAR, darkcolor=KENAR, padding=5)
+    st.configure("TSpinbox", fieldbackground=KART, foreground=METIN, background=KART, insertcolor=METIN,
+                 bordercolor=KENAR, lightcolor=KENAR, darkcolor=KENAR, arrowcolor=SOLUK, padding=4)
+    st.configure("TCheckbutton", background=BG, foreground=METIN)
+    st.map("TCheckbutton", background=[("active", BG)], foreground=[("active", METIN)])
+    st.map("TEntry", bordercolor=[("focus", VURGU)], lightcolor=[("focus", VURGU)], darkcolor=[("focus", VURGU)])
+    st.configure("TCombobox", fieldbackground=KART, background=KART, foreground=METIN, insertcolor=METIN,
+                 bordercolor=KENAR, lightcolor=KENAR, darkcolor=KENAR, arrowcolor=SOLUK, padding=4)
+    st.map("TCombobox", fieldbackground=[("readonly", KART)], foreground=[("readonly", METIN)],
+           bordercolor=[("focus", VURGU)],
+           selectbackground=[("readonly", KART)], selectforeground=[("readonly", METIN)])
+    st.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
+    st.configure("TNotebook.Tab", padding=(22, 9), background=BG, foreground=SOLUK, font=("Segoe UI", 10, "bold"), borderwidth=0)
+    st.map("TNotebook.Tab", background=[("selected", KART)], foreground=[("selected", VURGU)])
+    st.configure("Treeview", background=KART, fieldbackground=KART, foreground=METIN, rowheight=round(TABLO_PUNTO * 2.8),
+                 borderwidth=0, font=("Segoe UI", TABLO_PUNTO))
+    st.configure("Treeview.Heading", background=BASLIK, foreground=METIN, font=("Segoe UI", max(9, TABLO_PUNTO), "bold"),
+                 padding=(6, 7), relief="flat", borderwidth=0)
+    st.map("Treeview.Heading", background=[("active", BHOV)])
+    st.map("Treeview", background=[("selected", SEC)], foreground=[("selected", METIN)])
+    st.configure("Vertical.TScrollbar", background=SB, troughcolor=BG, bordercolor=BG, arrowcolor=SOLUK, gripcolor=SB)
+    st.map("Vertical.TScrollbar", background=[("active", SBH)])
 
 
 DONEMLER = ["Son 12 ay", "Son 24 ay", "Bu yıl", "Geçen yıl"]
@@ -1820,7 +2070,7 @@ class App:
     def __init__(s):
         s.root = tk.Tk()
         s.root.title("İmar Uygulamaları - Encümen Karar ve Makbuz Kayıtları")
-        modern_tasarim.pencere_merkeze_yerlestir(s.root, 1420, 780)
+        s.root.geometry("1420x780")
         s.edit, s.son, s.siralama = None, None, None
         s.gizli = 0
         s.gecik_say = 0
@@ -1832,52 +2082,23 @@ class App:
         except ValueError:
             pass
         s.koyu_var = tk.BooleanVar(value=KOYU)
-        s.rozet_var = tk.BooleanVar(value=ayar("rozet") != "0")
-        s._rz_hucre, s._rz_cizgi, s._rz_hdr, s._rid = [], [], 34, None
         s.detay_var = tk.BooleanVar(value=False)
         s.detay_acik = False
         s.sutun_var = {k: tk.BooleanVar(value=True) for k in TV_COLS[1:]}
         s.sutun_goster = list(TV_COLS)
         tema_kur(s.root)
-        modern_tasarim.tema_uygula(s.root, KOYU)
         s.simge_koy()
         s.root.minsize(1000, 560)
-      
-        s.baslik_cubuk = modern_tasarim.ozel_baslik(
-            s.root,
-            "İMAR UYGULAMALARI  |  ENCÜMEN KARAR VE MAKBUZ KAYITLARI",
-            KOYU,
-            kurumsal_alt="T.C. Mustafakemalpaşa Belediyesi• İmar ve Şehircilik Müdürlüğü • Encümen Kayıt Sistemi"
-        )
-
-        bnd = tk.Frame(s.root, bg=BG)
+        bnd = tk.Frame(s.root, bg="#1e293b")
         bnd.pack(fill="x")
-
-        s.tema_dugme = tk.Label(
-        bnd,
-        text=s.tema_yazi(),
-        bg=BG,
-        fg=METIN,
-        padx=14,
-        pady=9,
-        cursor="hand2",
-        font=("Segoe UI", 9, "bold")
-        )
+        tk.Label(bnd, text="İmar Uygulamaları", bg="#1e293b", fg="white", font=("Segoe UI", 15, "bold"),
+                 padx=18, pady=11).pack(side="left")
+        tk.Label(bnd, text="Encümen karar ve makbuz kayıtları", bg="#1e293b", fg="#94a3b8").pack(side="left")
+        s.tema_dugme = tk.Label(bnd, text=s.tema_yazi(), bg="#1e293b", fg="#cbd5e1", padx=14, cursor="hand2")
         s.tema_dugme.pack(side="right")
-        s.tema_dugme.bind(
-        "<Button-1>",
-        lambda e: s.tema_degistir()
-        )
-
-        s.bildirim = tk.Label(
-        bnd,
-        text="",
-        bg=BG,
-        fg="#D97706",
-        padx=18
-        )
+        s.tema_dugme.bind("<Button-1>", lambda e: s.tema_degistir())
+        s.bildirim = tk.Label(bnd, text="", bg="#1e293b", fg="#fbbf24", padx=18)
         s.bildirim.pack(side="right")
-
         s.nb = ttk.Notebook(s.root)
         s.nb.pack(fill="both", expand=True, padx=10, pady=(8, 10))
         sek = ttk.Frame(s.nb)
@@ -1897,24 +2118,23 @@ class App:
             kf.columnconfigure(i, weight=1, uniform="k")
             c = tk.Frame(kf, bg=KART, highlightthickness=1, highlightbackground=KENAR, cursor="hand2")
             c.grid(row=0, column=i, sticky="nsew", padx=4)
-            sayi = tk.Label(c, text="–", bg=KART, fg=modern_tasarim.stat_renk(KART_RENK[anahtar], KOYU),
-                            font=("Segoe UI", 22, "bold"), anchor="w")
-            sayi.pack(fill="x", padx=16, pady=(12, 0))
-            tk.Label(c, text=baslik, bg=KART, fg=SOLUK, font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=16, pady=(0, 12))
+            sayi = tk.Label(c, text="–", bg=KART, fg=METIN, font=("Segoe UI", 20, "bold"), anchor="w")
+            sayi.pack(fill="x", padx=14, pady=(8, 0))
+            tk.Label(c, text=baslik, bg=KART, fg=SOLUK, anchor="w").pack(fill="x", padx=14, pady=(0, 8))
             for w in [c] + c.winfo_children():
                 w.bind("<Button-1>", lambda e, a=anahtar: s.kart_tikla(a))
             s.kartlar[anahtar] = sayi
         top = ttk.Frame(sek)
         top.pack(fill="x", padx=6, pady=(6, 2))
-        ttk.Label(top, text="🔍 Ara:").pack(side="left")
+        ttk.Label(top, text="Ara:").pack(side="left")
         s.ara = tk.StringVar()
         s.ara.trace_add("write", lambda *a: s.load_gecikmeli())
         s.ara_kutu = ttk.Entry(top, textvariable=s.ara, width=24)
         s.ara_kutu.pack(side="left", padx=4)
         s.ara_kutu.bind("<Escape>", lambda e: s.ara.set(""))
-        for t, c in [("+ Yeni Kayıt", s.yeni), ("Formda Düzenle", s.duzenle), ("Toplu Güncelle", s.toplu), ("Sil", s.sil),
+        for t, c in [("Yeni", s.yeni), ("Formda Düzenle", s.duzenle), ("Toplu Güncelle", s.toplu), ("Sil", s.sil),
                      ("Kararı Aç", lambda: s.ac("karar")), ("Makbuzu Aç", lambda: s.ac("makbuz"))]:
-            ttk.Button(top, text=t, command=c, style="Accent.TButton" if t == "+ Yeni Kayıt" else (
+            ttk.Button(top, text=t, command=c, style="Accent.TButton" if t == "Yeni" else (
                 "Danger.TButton" if t == "Sil" else "TButton")).pack(side="left", padx=3)
         ym = tk.Menu(top, tearoff=0)
         ym.add_command(label="Şimdi yedekle", command=s.yedek_simdi)
@@ -1925,6 +2145,7 @@ class App:
         vm.add_command(label="Son işlemi geri al (Ctrl+Z)", command=s.geri_al)
         vm.add_separator()
         vm.add_command(label="Parsel Sorgu (TKGM)...", command=s.parsel_sorgu_ac)
+        vm.add_command(label="Pasif Parseller (liste)...", command=s.pasif_liste_ac)
         vm.add_command(label="Listeler (mahalle, müellif, işlem, durum)...", command=lambda: Listeler(s))
         vm.add_command(label="CSV Al (Google E-Tablo'dan)...", command=s.csv_al)
         vm.add_command(label="CSV Aktar (tüm kayıtlar)...", command=s.csv_aktar)
@@ -1941,7 +2162,6 @@ class App:
         ttk.Menubutton(top, text="Rapor", menu=rm).pack(side="left", padx=2)
         em = tk.Menu(top, tearoff=0)
         em.add_checkbutton(label="Koyu tema", variable=s.koyu_var, command=s.tema_degistir)
-        em.add_checkbutton(label="Modern rozet ve satır çizgileri", variable=s.rozet_var, command=s.rozet_degistir)
         em.add_checkbutton(label="Detay paneli (F3)", variable=s.detay_var, command=s.detay_ac_kapa)
         em.add_separator()
         em.add_command(label="Yazıyı büyüt (Ctrl + tekerlek yukarı  /  Ctrl +)", command=lambda: s.yazi_boyut(1))
@@ -1978,11 +2198,12 @@ class App:
         s.gm = tk.Menu(s.ta.f, tearoff=0, postcommand=s.gm_doldur)
         ttk.Menubutton(s.ta.f, text="Kayıtlı filtreler", menu=s.gm).pack(side="right", padx=6)
         ttk.Button(s.ta.f, text="Parsel Sorgu", command=s.parsel_sorgu_ac).pack(side="right", padx=6)
+        ttk.Button(s.ta.f, text="Pasif Parseller", command=s.pasif_liste_ac).pack(side="right", padx=6)
         kap = ttk.Frame(sek)
         kap.pack(fill="both", expand=True, padx=6)
         s.tv = ttk.Treeview(kap, columns=TV_COLS, show="headings", selectmode="extended")
         sb = ttk.Scrollbar(kap, orient="vertical", command=s.tv.yview)
-        s.tv.configure(yscrollcommand=lambda a, b: (sb.set(a, b), s.rozet_planla()))
+        s.tv.configure(yscrollcommand=sb.set)
         s.sb = sb
         sb.pack(side="right", fill="y")
         s.tv.pack(side="left", fill="both", expand=True)
@@ -2002,9 +2223,10 @@ class App:
             s.tv.column(k, width=g, anchor="w")
         s.tv.tag_configure("gec", foreground=KIRMIZI)
         s.tv.tag_configure("pas", foreground=KIRMIZI)
-        s.durum_tag_ayarla()
-        s.durum = ttk.Label(sek, style="Footer.TLabel")
-        s.durum.pack(fill="x", padx=6, pady=(6, 2))
+        for i, r in enumerate(DURUM_UI.values()):
+            s.tv.tag_configure(f"d{i}", background=r)
+        s.durum = ttk.Label(sek)
+        s.durum.pack(anchor="w", padx=8, pady=(4, 2))
         lg = ttk.Frame(sek)
         lg.pack(anchor="w", padx=8, pady=(0, 4))
         ttk.Label(lg, text="Renkler:").pack(side="left")
@@ -2013,6 +2235,7 @@ class App:
         ttk.Label(lg, text="    Dosya:  ✓ var   ✗ yok   ? klasöre ulaşılamıyor").pack(side="left")
         s.grafik_kur()
         s.fen_kur()
+        threading.Thread(target=_parsel_onyukle, daemon=True).start()  # Parsel Sorgu düğmesi beklemesin
         s.tv.bind("<Button-1>", s.tikla)
         s.tv.bind("<Double-1>", s.cift)
         s.tv.bind("<Button-3>", s.sag)
@@ -2028,10 +2251,6 @@ class App:
         s.root.bind("<Control-Key-0>", lambda e: s.yazi_boyut(None))
         s.root.bind("<F3>", lambda e: (s.detay_var.set(not s.detay_var.get()), s.detay_ac_kapa()))
         s.tv.bind("<F2>", lambda e: s.f2())
-        s.tv.bind("<Configure>", lambda e: s.rozet_planla(), add="+")
-        s.tv.bind("<ButtonRelease-1>", lambda e: s.rozet_planla(), add="+")
-        s.tv.bind("<<TreeviewSelect>>", lambda e: s.rozet_planla(), add="+")
-        s.nb.bind("<<NotebookTabChanged>>", lambda e: s.rozet_planla(), add="+")
         s.menu = tk.Menu(s.root, tearoff=0)
         for t, c in [("Bu hücreyi düzenle (F2)", s.f2), ("Satırı formda düzenle", s.duzenle),
                      ("Seçili satırları toplu güncelle...", s.toplu),
@@ -2141,6 +2360,9 @@ class App:
         s.kart_guncelle(tum)
         try:
             fen_senkronla()  # yeni TKGM sonuçları Fen Klasörü'ne işlenir
+            pl = getattr(s, "_pasif_pencere", None)
+            if pl is not None and pl.winfo_exists():
+                pl.yukle()
         except Exception:
             pass
 
@@ -2247,7 +2469,6 @@ class App:
         gc = f"    ·  ⚠ {s.gecik_say} geciken iş" if s.gecik_say else ""
         s.durum.config(text=f"{len(ch)} kayıt    Toplam Alınan Ücret: {para_yaz(toplam)}{gz}{gc}    "
                             "(Çift tıkla: hücre düzenle · Ctrl/Shift ile çoklu seçim → Toplu Güncelle · başlığa tıkla: sırala)")
-        s.rozet_planla()
 
     def sirala(s, k):
         if s.siralama and s.siralama[0] == k:
@@ -2391,8 +2612,6 @@ class App:
         return "◐  Açık tema" if KOYU else "◐  Koyu tema"
 
     def _yeniden_boya(s, w, esle):
-        if getattr(w, "_modern_baslik", False):  # başlık şeridini modern_tasarim.baslik_yenile boyar
-            return
         OPS = ("bg", "fg", "background", "foreground", "activebackground", "activeforeground", "highlightbackground",
                "highlightcolor", "selectbackground", "selectforeground", "insertbackground", "disabledforeground",
                "selectcolor")
@@ -2418,17 +2637,15 @@ class App:
         esle = {eski[k]: yeni[k] for k in eski}
         esle.update({eski_d[k]: DURUM_UI[k] for k in eski_d})
         tema_kur(s.root)
-        modern_tasarim.tema_uygula(s.root, KOYU)
         s._yeniden_boya(s.root, esle)
-        modern_tasarim.baslik_yenile(s.baslik_cubuk, KOYU)
-        s.kart_renk_uygula()
         s.tv.tag_configure("gec", foreground=KIRMIZI)
         s.tv.tag_configure("pas", foreground=KIRMIZI)
-        s.durum_tag_ayarla()
+        for i, r in enumerate(DURUM_UI.values()):
+            s.tv.tag_configure(f"d{i}", background=r)
         s.fen_tv.tag_configure("eski", foreground=FEN_ESKI)
         s.fen_tv.tag_configure("yeni", foreground=FEN_YENI)
+        s.fen_tv.tag_configure("ara", foreground=FEN_ESKI)
         s.koyu_var.set(KOYU)
-        s.rozet_planla()
         s.tema_dugme.config(text=s.tema_yazi())
         s.detay_renk()
         s.ciz_hepsi()
@@ -2446,7 +2663,6 @@ class App:
         st.configure("Treeview.Heading", font=("Segoe UI", max(9, n), "bold"))
         q("INSERT OR REPLACE INTO ayar VALUES (?,?)", ("yazi_boyut", str(n)))
         s.bildir(f"Tablo yazı boyutu: {n}", 1500)
-        s.rozet_planla()
 
     def sutun_uygula(s, kaydet=True):
         s.edit_kapat()
@@ -2518,128 +2734,6 @@ class App:
                     t.insert("end", str(v or "–") + "\n\n", "d")
         t.configure(state="disabled")
 
-    # ---------- Modern görünüm katmanı (yalnızca görsel; veriye dokunmaz) ----------
-    ROZET_SUTUN = ("onay", "alinan_ucret", "karar_ok", "makbuz_ok", "parsel_durum")
-
-    def durum_tag_ayarla(s):
-        """Rozet açıkken satır zemini sade kalır, durum rengi rozette görünür."""
-        for i, r in enumerate(DURUM_UI.values()):
-            s.tv.tag_configure(f"d{i}", background=KART if s.rozet_var.get() else r)
-
-    def rozet_degistir(s):
-        q("INSERT OR REPLACE INTO ayar VALUES (?,?)", ("rozet", "1" if s.rozet_var.get() else "0"))
-        s.durum_tag_ayarla()
-        s.rozet_planla()
-
-    def rozet_planla(s):
-        if getattr(s, "_rid", None) is None:
-            s._rid = s.root.after(25, s.rozet_ciz)
-
-    def rozet_gizle(s, ilk_hucre=0, ilk_cizgi=0):
-        for f, _ in s._rz_hucre[ilk_hucre:]:
-            f.place_forget()
-        for c in s._rz_cizgi[ilk_cizgi:]:
-            c.place_forget()
-
-    def rozet_ciz(s):
-        s._rid = None
-        try:
-            s._rozet_ciz()
-        except Exception:
-            try:
-                s.rozet_gizle()
-            except Exception:
-                pass
-
-    def _rz_ilet(s, w):
-        """Rozetlerin üstüne yapılan tıklama/tekerlek olaylarını tabloya iletir."""
-        def yap(ad):
-            def f(e):
-                kw = dict(x=e.x_root - s.tv.winfo_rootx(), y=e.y_root - s.tv.winfo_rooty(), state=e.state, time=e.time)
-                if ad.endswith("MouseWheel"):
-                    kw["delta"] = e.delta
-                s.tv.event_generate(ad, **kw)
-                return "break"
-            return f
-        for ad in ("<Button-1>", "<ButtonRelease-1>", "<Button-3>", "<MouseWheel>", "<Control-MouseWheel>"):
-            w.bind(ad, yap(ad))
-
-    def _rz_hucre_al(s, no):
-        while len(s._rz_hucre) <= no:
-            f = tk.Frame(s.tv, bd=0, highlightthickness=0)
-            l = tk.Label(f, bd=0)
-            s._rz_ilet(f)
-            s._rz_ilet(l)
-            s._rz_hucre.append((f, l))
-        return s._rz_hucre[no]
-
-    def _rozet_ciz(s):
-        tv = s.tv
-        if not s.rozet_var.get() or not tv.winfo_ismapped():
-            s.rozet_gizle()
-            return
-        cocuk = tv.get_children()
-        n = len(cocuk)
-        if not n:
-            s.rozet_gizle()
-            return
-        try:
-            rh = int(ttk.Style().lookup("Treeview", "rowheight") or 28)
-        except ValueError:
-            rh = 28
-        yuk = tv.winfo_height()
-        ilk = max(0, int(tv.yview()[0] * n) - 1)
-        son = min(n, ilk + yuk // max(16, rh) + 4)
-        if tv.yview()[0] == 0:
-            b0 = tv.bbox(cocuk[0])
-            if b0:
-                s._rz_hdr = b0[1]
-        sec = set(tv.selection())
-        font = ("Segoe UI", TABLO_PUNTO)
-        fkalin = ("Segoe UI", TABLO_PUNTO, "bold")
-        yesil = modern_tasarim.stat_renk("yesil", KOYU)
-        kirmizi = modern_tasarim.stat_renk("kirmizi", KOYU)
-        amber = modern_tasarim.stat_renk("turuncu", KOYU)
-        hn = cn = 0
-        for iid in cocuk[ilk:son]:
-            b = tv.bbox(iid)
-            if not b or b[1] < s._rz_hdr - 2 or b[1] + b[3] > yuk + 1:
-                continue
-            zemin = SEC if iid in sec else KART
-            while len(s._rz_cizgi) <= cn:
-                s._rz_cizgi.append(tk.Frame(tv, height=1, bd=0, highlightthickness=0))
-            c = s._rz_cizgi[cn]
-            c.configure(bg=KENAR)
-            c.place(x=0, y=b[1] + b[3] - 1, relwidth=1, height=1)
-            cn += 1
-            for kol in s.ROZET_SUTUN:
-                cb = tv.bbox(iid, kol)
-                if not cb:
-                    continue
-                v = tv.set(iid, kol)
-                if not v:
-                    continue
-                f, l = s._rz_hucre_al(hn)
-                hn += 1
-                f.configure(bg=zemin)
-                l.pack_forget()
-                if kol == "onay":
-                    l.configure(text=v, bg=DURUM_UI.get(v, BASLIK), fg=METIN, font=("Segoe UI", max(8, TABLO_PUNTO - 1), "bold"), padx=8, pady=1)
-                    l.pack(side="left", padx=6)
-                else:
-                    if kol == "alinan_ucret":
-                        fg, ft, an = yesil, fkalin, "w"
-                    elif kol in ("karar_ok", "makbuz_ok"):
-                        fg, ft, an = (yesil if "✓" in v else kirmizi if "✗" in v else amber), fkalin, "center"
-                    else:
-                        dv = v.strip().lower()
-                        fg = kirmizi if dv.startswith("pasif") else yesil if dv.startswith("aktif") else METIN
-                        ft, an = fkalin, "w"
-                    l.configure(text=v, bg=zemin, fg=fg, font=ft, anchor=an, padx=6, pady=0)
-                    l.pack(fill="both", expand=True)
-                f.place(x=cb[0], y=cb[1], width=cb[2], height=cb[3] - 1)
-        s.rozet_gizle(hn, cn)
-
     def etiket(s, v):
         return ("d%d" % list(DURUM_RENK).index(v),) if v in DURUM_RENK else ()
 
@@ -2678,15 +2772,9 @@ class App:
                 harc += para(d["alinan_ucret"])
         s.kartlar["acik"].config(text=str(acik))
         s.kartlar["encumen"].config(text=str(encumen))
-        s.kartlar["gecik"].config(text=str(gecik))
+        s.kartlar["gecik"].config(text=str(gecik), fg=KIRMIZI if gecik else METIN)
         s.kartlar["harc"].config(text=para_yaz(harc, 0))
-        s.kartlar["parsel"].config(text=str(parsel))
-        s.kart_renk_uygula()
-
-    def kart_renk_uygula(s):
-        """Sayaç rakamlarını kendi renginde gösterir (açık/koyu temaya uyumlu)."""
-        for a, lbl in s.kartlar.items():
-            lbl.config(fg=modern_tasarim.stat_renk(KART_RENK[a], KOYU))
+        s.kartlar["parsel"].config(text=str(parsel), fg=KIRMIZI if parsel else METIN)
 
     def kart_tikla(s, a):
         s.filtre_sifirla()
@@ -2804,29 +2892,39 @@ class App:
             w.bind("<Return>", lambda e: s.fen_ara())
         ttk.Button(ust, text="Ara", style="Accent.TButton", command=s.fen_ara).pack(side="left", padx=4)
         ttk.Button(ust, text="Temizle", command=s.fen_temizle).pack(side="left", padx=4)
-        ttk.Button(ust, text="Fen işlemi ekle...", command=lambda: FenIslemDialog(s)).pack(side="right", padx=4)
-        ttk.Button(ust, text="Seçileni sil", command=s.fen_sil).pack(side="right", padx=4)
+        eylem = ttk.Frame(s.fsek)
+        eylem.pack(fill="x", padx=12, pady=(2, 2))
+        ttk.Button(eylem, text="Fen işlemi ekle...", command=lambda: FenIslemDialog(s)).pack(side="left", padx=(0, 4))
+        ttk.Button(eylem, text="Düzenle... (eski/yeni parsel)", command=s.fen_duzenle).pack(side="left", padx=4)
+        ttk.Button(eylem, text="Hareket listesi (çift tık)", command=s.fen_detay).pack(side="left", padx=4)
+        ttk.Button(eylem, text="Seçileni sil", command=s.fen_sil).pack(side="left", padx=4)
+        ttk.Button(eylem, text="TKGM sonucuna dön", command=s.fen_tkgm_donus).pack(side="left", padx=4)
+        ttk.Button(eylem, text="Pasif Parseller (liste)", command=s.pasif_liste_ac).pack(side="right", padx=4)
         ttk.Label(s.fsek, foreground=SOLUK, text="Eski ya da yeni parsel numarasını yazın; ikisinde de ararım. Adası olmayan parseller için ada 0 "
-                  "(boş bırakırsanız tüm adalarda aranır). Mahalle boşsa tüm mahalleler taranır. Kayıtlar, Parsel Sorgu sonuçlarından "
-                  "otomatik oluşur; elle de eklenebilir.", wraplength=1100, justify="left").pack(anchor="w", padx=14)
+                  "(boş bırakırsanız tüm adalarda aranır). Mahalle boşsa tüm mahalleler taranır. Kayıtlar Parsel Sorgu sonuçlarından "
+                  "otomatik oluşur; Düzenle ile eski/yeni parselleri elle düzeltebilirsiniz (TKGM*: elle düzenlenmiş).",
+                  wraplength=1100, justify="left").pack(anchor="w", padx=14)
         kap = ttk.Frame(s.fsek)
         kap.pack(fill="both", expand=True, padx=12, pady=(8, 2))
-        cols = ("eslesme", "mahalle", "tur", "tarih", "eski", "yeni", "kaynak", "is")
+        cols = ("eslesme", "mahalle", "tur", "tarih", "eski", "yeni", "alan", "kaynak", "is")
         s.fen_tv = ttk.Treeview(kap, columns=cols, show="headings", selectmode="browse", height=9)
-        for c, ad, w in (("eslesme", "Eşleşme", 110), ("mahalle", "Mahalle", 130), ("tur", "İşlem", 100), ("tarih", "Tarih", 95),
-                         ("eski", "Eski parseller", 230), ("yeni", "Yeni parseller", 200), ("kaynak", "Kaynak", 70), ("is", "İş kayıt no", 80)):
+        for c, ad, w in (("eslesme", "Eşleşme", 105), ("mahalle", "Mahalle", 120), ("tur", "İşlem", 95), ("tarih", "Tarih", 90),
+                         ("eski", "Eski parseller", 210), ("yeni", "Yeni parseller", 190), ("alan", "Alan (m²)", 80),
+                         ("kaynak", "Kaynak", 65), ("is", "İş no", 65)):
             s.fen_tv.heading(c, text=ad)
             s.fen_tv.column(c, width=w, anchor="w")
         s.fen_tv.tag_configure("eski", foreground=FEN_ESKI)
         s.fen_tv.tag_configure("yeni", foreground=FEN_YENI)
+        s.fen_tv.tag_configure("ara", foreground=FEN_ESKI)
         sb = ttk.Scrollbar(kap, orient="vertical", command=s.fen_tv.yview)
         s.fen_tv.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         s.fen_tv.pack(side="left", fill="both", expand=True)
         s.fen_tv.bind("<<TreeviewSelect>>", lambda e: s.fen_grafik_ciz())
+        s.fen_tv.bind("<Double-1>", lambda e: s.fen_detay())
         s.fen_say = ttk.Label(s.fsek, text="", foreground=SOLUK)
         s.fen_say.pack(anchor="w", padx=14, pady=(2, 2))
-        s.fen_cv = tk.Canvas(s.fsek, bg=KART, height=210, highlightthickness=1, highlightbackground=KENAR)
+        s.fen_cv = tk.Canvas(s.fsek, bg=KART, height=270, highlightthickness=1, highlightbackground=KENAR)
         s.fen_cv.pack(fill="x", padx=12, pady=(0, 12))
         s.fen_cv.bind("<Configure>", lambda e: s.fen_grafik_ciz())
         s.fen_grafik_ciz()
@@ -2844,6 +2942,10 @@ class App:
         s.fen_par.set("")
         s.fen_ara()
 
+    def fen_secili(s):
+        sec = s.fen_tv.selection()
+        return s.fen_kayit.get(sec[0]) if sec else None
+
     def fen_ara(s):
         mah, ada, par = s.fen_mah.get().strip(), s.fen_ada.get().strip(), s.fen_par.get().strip()
         s.fen_son = (mah, ada, par)
@@ -2858,26 +2960,54 @@ class App:
         for n, r in enumerate(sonuc):
             iid = str(n)
             s.fen_kayit[iid] = r
-            eslesme = {"eski": "Eski parsel", "yeni": "Yeni parsel"}.get(r["rol"], "—")
+            eslesme = {"eski": "Eski parsel", "yeni": "Yeni parsel", "ara": "Ara parsel"}.get(r["rol"], "—")
             s.fen_tv.insert("", "end", iid=iid, tags=(r["rol"],) if r["rol"] else (), values=(
                 eslesme, r["mahalle"], r["tur"] or "–", r["tarih"] or "–",
                 ", ".join(parsel_etiket(a, p) for a, p in r["eski"]) or "–",
-                ", ".join(parsel_etiket(a, p) for a, p in r["yeni"]) or "–", r["kaynak"],
-                f"#{r['work_id']}" if r["work_id"] else ""))
+                ", ".join(parsel_etiket(a, p) for a, p in r["yeni"]) or "–", r["alan"] or "–",
+                r["kaynak"] + ("*" if r["kilit"] else ""), f"#{r['work_id']}" if r["work_id"] else ""))
         s.fen_say.config(text=f"{len(sonuc)} kayıt bulundu" if sonuc else "Kayıt bulunamadı")
         if sonuc:
             s.fen_tv.selection_set("0")
         s.fen_grafik_ciz()
 
+    def fen_duzenle(s):
+        r = s.fen_secili()
+        if not r:
+            messagebox.showinfo("Uyarı", "Önce düzenlenecek kaydı seçin.")
+            return
+        FenIslemDialog(s, r)
+
+    def fen_detay(s):
+        r = s.fen_secili()
+        if not r:
+            messagebox.showinfo("Uyarı", "Önce bir kayıt seçin.")
+            return
+        k = dict(r, durum="Pasif", parsel_no="")
+        ZincirDetay(s, k)
+
+    def fen_tkgm_donus(s):
+        r = s.fen_secili()
+        if not r:
+            messagebox.showinfo("Uyarı", "Önce bir kayıt seçin.")
+            return
+        if r["kaynak"] != "TKGM" or not r["kilit"]:
+            messagebox.showinfo("Fen Klasörü", "Bu kayıt elle düzenlenmiş bir TKGM kaydı değil.")
+            return
+        if messagebox.askyesno("TKGM sonucuna dön", "Elle yaptığınız değişiklikler silinecek, kayıt Parsel Sorgu sonucuna göre yeniden "
+                               "oluşturulacak. Devam edilsin mi?"):
+            q("UPDATE fen_islem SET kilit=0, imza='' WHERE id=?", (r["id"],))
+            fen_senkronla()
+            s.fen_ara()
+
     def fen_sil(s):
-        sec = s.fen_tv.selection()
-        if not sec or sec[0] not in s.fen_kayit:
+        r = s.fen_secili()
+        if not r:
             messagebox.showinfo("Uyarı", "Önce silinecek kaydı seçin.")
             return
-        r = s.fen_kayit[sec[0]]
         if r["kaynak"] == "TKGM":
             messagebox.showinfo("Fen Klasörü", "Bu kayıt Parsel Sorgu sonucundan otomatik oluşturulur; silinemez. "
-                                "Sonuç değişirse kendiliğinden güncellenir.")
+                                "Yanlışsa 'Düzenle' ile eski/yeni parselleri düzeltebilirsiniz.")
             return
         if messagebox.askyesno("Sil", "Seçili fen işlemi silinsin mi?"):
             fen_sil_kayit(r["id"])
@@ -2887,30 +3017,15 @@ class App:
         cv = s.fen_cv
         cv.delete("all")
         w = max(cv.winfo_width(), 600)
-        sec = s.fen_tv.selection()
-        if not sec or sec[0] not in s.fen_kayit:
+        r = s.fen_secili()
+        if not r:
             cv.create_text(w / 2, 100, text="Bir sonuç seçince eski → yeni parsel grafiği burada görünür", fill=SOLUK)
             return
-        r = s.fen_kayit[sec[0]]
-        eski = [parsel_etiket(a, p) for a, p in r["eski"]]
-        yeni = [parsel_etiket(a, p) for a, p in r["yeni"]]
-        aranan = parsel_etiket(s.fen_son[1], s.fen_son[2]) if s.fen_son[2] else ""
         cv.create_text(12, 14, anchor="w", font=("Segoe UI", 10, "bold"), fill=METIN,
                        text=f"{r['tur'] or 'İşlem'} · {r['tarih'] or '–'} · {r['mahalle']}")
-        iki = bool(eski and yeni)
-        yer = lambda liste_, y: {no: (w * (i + 1) / (len(liste_) + 1), y) for i, no in enumerate(liste_)}
-        ke, ky = yer(eski, 70 if iki else 110), yer(yeni, 160 if iki else 110)
-        if iki:
-            for ex, ey in ke.values():
-                for yx, yy in ky.values():
-                    cv.create_line(ex, ey + 16, ex, 115, yx, 115, yx, yy - 16, fill=SOLUK, width=2)
-        for gruplar, dolgu, yazi in ((ke, KENAR, METIN), (ky, "#4d7c0f", "#ffffff")):
-            for no, (x, y) in gruplar.items():
-                secili = no == aranan
-                cv.create_rectangle(x - 46, y - 16, x + 46, y + 16, fill=dolgu, outline=VURGU if secili else SOLUK, width=3 if secili else 1)
-                cv.create_text(x, y, text=no, fill=yazi, font=("Segoe UI", 10, "bold" if secili else "normal"))
-        if r.get("aciklama"):
-            cv.create_text(w / 2, 198, fill=SOLUK, font=("Segoe UI", 9), text=r["aciklama"][:150])
+        dugum, kenar = zincir_modeli(zincir_coz(r.get("zincir")), r["eski"], r["yeni"])
+        aranan = f"{s.fen_son[1] or '0'}/{s.fen_son[2]}" if s.fen_son[2] else ""
+        zincir_grafik_ciz(cv, dugum, kenar, aranan, y0=62, temizle=False)
 
     # ---------- Parsel Sorgu (TKGM) bağlantısı ----------
     def parsel_sorgu_ac(s):
@@ -2919,7 +3034,7 @@ class App:
             import parsel_sorgu_modulu
         except ImportError as e:
             messagebox.showerror("Parsel Sorgu", "Parsel Sorgu modülü yüklenemedi.\n\nparsel_sorgu_modulu.py bu programla aynı klasörde "
-                                 "olmalı ve 'pip install requests openpyxl pillow' ile kütüphaneler kurulu olmalı.\n\nAyrıntı: " + str(e))
+                                 "olmalı ve 'pip install requests openpyxl' ile kütüphaneler kurulu olmalı.\n\nAyrıntı: " + str(e))
             return
         p = getattr(s, "_parsel_pencere", None)
         try:
@@ -2929,12 +3044,22 @@ class App:
                 return
         except tk.TclError:
             pass
-        kaynak = [(i, d["mahalle"], d["ada_parsel"]) for i, d in s.tum_kayitlar()
-                  if not arsiv_mi(d["onay"]) and d["mahalle"] and d["ada_parsel"]]
+        # Hafif sorgu: tum_kayitlar() kullanılmaz (ağ klasörlerindeki dosyaları taramaz, bu yüzden pencere donmaz)
+        kaynak = [(i, mh, ap) for i, mh, ap, onay in q("SELECT id, mahalle, ada_parsel, onay FROM kayit")
+                  if not arsiv_mi(onay) and (mh or "").strip() and (ap or "").strip()]
         s._parsel_pencere = parsel_sorgu_modulu.App(s.root, kaynak=kaynak, takip_db=DB, sonuc_geri_cagir=s.parsel_sonuc_geldi)
 
     def parsel_sonuc_geldi(s, work_id, ozet):
         s.load_gecikmeli(700)  # birçok sonuç art arda gelir: tabloyu tek seferde yenile
+
+    def parsel_onay_kaldir(s, ids):
+        n = 0
+        for i in ids:
+            if (s.pk.get(i) or {}).get("onay"):
+                q("UPDATE parsel_kontrol SET onay_bekliyor=0 WHERE work_id=?", (i,))
+                n += 1
+        s.load()
+        return n
 
     def parsel_onayla(s):
         """Pasif parsel uyarısını kaldırır (işin durumuna dokunmaz)."""
@@ -2942,13 +3067,19 @@ class App:
         if not ids:
             messagebox.showinfo("Uyarı", "Önce satır(lar)ı seçin.")
             return
-        n = 0
-        for i in ids:
-            if (s.pk.get(i) or {}).get("onay"):
-                q("UPDATE parsel_kontrol SET onay_bekliyor=0 WHERE work_id=?", (i,))
-                n += 1
-        s.load()
+        n = s.parsel_onay_kaldir(ids)
         s.bildir(f"{n} kayıt için parsel uyarısı kaldırıldı" if n else "Seçili kayıtlarda onay bekleyen parsel uyarısı yok")
+
+    def pasif_liste_ac(s):
+        p = getattr(s, "_pasif_pencere", None)
+        try:
+            if p is not None and p.winfo_exists():
+                p.lift()
+                p.yukle()
+                return
+        except tk.TclError:
+            pass
+        s._pasif_pencere = PasifListe(s)
 
     # ---------- pencere, kopyalama, çoğaltma ----------
     def ayar_kaydet(s):
