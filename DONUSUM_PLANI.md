@@ -1,227 +1,243 @@
 # PySide6 Dönüşüm Planı — Encümen Kayıt + TKGM Parsel Sorgulama
 
-> İnceleme tarihi: 08.11.2026  
-> Depo: `fatihay16/is-Takip`  
-> İncelenen dal: `main`  
-> Kapsam dışı: `modern_tasarim.py` (kullanıcının açıklamasına göre eski, uygulanmamış ve ayrı bir deneme; açılmadı ve analiz edilmedi).  
-> Bu belge planlama çıktısıdır. Uygulama kaynak kodlarında, veritabanlarında veya mevcut çalışma dosyalarında değişiklik yapılmamıştır.
+> İnceleme tarihi: 09.11.2026  
+> Depo: `fatihay16/is-Takip` — incelenen kaynak dalı: `main`  
+> Belge dalı: `docs/pyside6-donusum-plani`  
+> Kapsam dışı: `modern_tasarim.py`. Kullanıcının açıklaması gereği eski ve uygulanmamış ayrı bir denemedir; açılmadı, analiz edilmedi ve kullanılmadı.  
+> Bu belge planlama/dokümantasyon güncellemesidir. Uygulama kaynak kodları, veritabanı dosyaları ve kullanıcı verileri değiştirilmedi.
 
-## 1. İncelenen dosyalar ve doğrulama
+## 1. Gerçek durumun doğrulanması
 
-| Dosya | İnceleme sonucu |
-|---|---|
-| `encumen_kayit.py` | 3.453 satır. Tkinter tabanlı ana Encümen/İş Takip uygulaması. `App` sınıfı, kayıt/form/filtre/rapor/yedek/Fen Klasörü ve TKGM bağlantısı. |
-| `parsel_sorgu_modulu.py` | 1.865 satır. Tkinter `Toplevel` modülü. TKGM CBS sorgusu, hareket zinciri çözümleme, Excel içe/dışa aktarma, yerel parsel veritabanı ve İş Takip bağlantısı. |
-| `requirements.txt` | Şu an yalnızca `requests>=2.31.0` ve `openpyxl>=3.1.2` içeriyor. PySide6 henüz listelenmiyor. |
-| `ENTEGRASYON.txt` | Entegrasyon davranışını ve bazı performans/kurulum notlarını açıklıyor. Özellikle sonuçların İş Takip DB'sindeki `parsel_kontrol` tablosuna yazıldığını doğruluyor. |
+İnceleme anındaki Git blob kimlikleri ve dosya boyutları:
 
-Dosyaların Git blob kimlikleri (inceleme anındaki):
-- `encumen_kayit.py`: `d5129119de41d398f699ed744e632fa99e152078`
-- `parsel_sorgu_modulu.py`: `5e263c774dd4bf4ac10728d0ae4869e6ed1b99ef`
-- `requirements.txt`: `9c8b396f7a2c879961abc6b8c315cf92328cb0f5`
-- `ENTEGRASYON.txt`: `607a8be57cb8bbd3445bfdaf56234a7ba0883f44`
+| Dosya | Blob SHA | Satır | Gerçek durum |
+|---|---|---:|---|
+| `encumen_kayit.py` | `d5129119de41d398f699ed744e632fa99e152078` | 3.453 | Tkinter ana uygulaması; PySide6 arayüz dönüşümü henüz yapılmamış. |
+| `parsel_sorgu_modulu.py` | `7c8bb3a7505ea434abe8f563ee0b079e5a4a0592` | 2.137 | **PySide6 arayüzü zaten mevcut.** Bu dosyayı hâlâ Tkinter arayüzüymüş gibi yeniden dönüştürmek doğru değil. |
+| `requirements.txt` | `574ec387c780f22d8afe854d04d52e69fb1827e8` | 4 | `requests>=2.31.0`, `openpyxl>=3.1.2`, `PySide6>=6.6,<7`. |
+| `ENTEGRASYON.txt` | `607a8be57cb8bbd3445bfdaf56234a7ba0883f44` | 27 | TKGM/İş Takip davranışını ve mevcut kullanıcı akışlarını açıklıyor; bazı kurulum bilgileri requirements ile güncel değil. |
 
-## 2. Mevcut uygulama envanteri
+**Önemli düzeltme:** İlk taslakta TKGM modülü Tkinter ve requirements yalnız requests/openpyxl olarak tanımlanmıştı. Güncel `main` dalı yeniden okununca bunun artık doğru olmadığı görüldü: TKGM modülü PySide6'ya taşınmış ve PySide6 bağımlılığı requirements dosyasına eklenmiş. Bu belge mevcut gerçek duruma göre güncellendi.
+
+## 2. Modül envanteri
 
 ### 2.1 Encümen / İş Takip — `encumen_kayit.py`
 
+- İçe aktarımlar Tkinter/`ttk`; ana pencere `App` içinde `tk.Tk()` ile kuruluyor.
 - Başlangıç: `init_db()`, ardından `App().root.mainloop()`.
-- Ana arayüz: `App` sınıfı; Kayıtlar, Grafikler ve Fen Klasörü sekmeleri.
-- Form ve yardımcı pencereler: `Form`, `Listeler`, `Silinenler`, `TopluGuncelle`, `RaporAyar`, `FenIslemDialog`, `ZincirDetay`, `PasifListe`, `Takvim`.
-- Veri/iş kuralları: Türkçe sıralama ve arama, tarih/para ayrıştırma, bekleme günü, arşiv durumları, kayıt filtreleri, toplu düzenleme, geri alma/son silinenler, CSV içe/dışa aktarma.
-- Dosya işlemleri: karar ve makbuz dosyalarının yolunu kaydetme/açma, klasör indeksleme, yedek alma/geri yükleme.
-- Raporlama: HTML rapor üretimi ve tarayıcıda açma; grafik çizimleri.
-- Parsel/Fen işlevleri: TKGM sonuçlarını okuma, pasif parsel listesi, hareket zinciri, eski-yeni parsel ilişkileri, Fen Klasörü senkronizasyonu ve elle düzenlenmiş kayıtları kilitleme.
-- Önemli fonksiyon grupları: `init_db`, `parsel_kontrol_oku`, `fen_kayit_ekle`, `fen_kayit_guncelle`, `fen_senkronla`, `kayit_sil`, `kayit_geri`, `yedekle`, `App.parsel_sorgu_ac`, `App.parsel_sonuc_geldi`, `App.fen_*`.
+- Ana arayüz sekmeleri: Kayıtlar, Grafikler, Fen Klasörü.
+- Yardımcı pencereler/sınıflar: `Takvim`, `Form`, `Listeler`, `Silinenler`, `TopluGuncelle`, `RaporAyar`, `FenIslemDialog`, `ZincirDetay`, `PasifListe`, `TarihAraligi`, `ListeFiltreleri`, `AramaliCombobox`, `App`.
+- Temel veri/iş mantığı: Türkçe sıralama ve arama, tarih/para biçimleme, bekleme günü, arşiv durumu, kayıt ekleme/düzenleme/silme/geri alma, 90 günlük son silinenler, filtreler/kayıtlı görünümler, toplu güncelleme.
+- Rapor/çıktı: HTML rapor üretimi, grafikler, CSV içe/dışa aktarma.
+- Dosya işlemleri: karar/makbuz dosya yollarını kaydetme ve açma, klasör indeksleme, yedek alma ve yedekten geri yükleme.
+- Parsel/Fen: TKGM sonuçlarını okuma, pasif parsel uyarıları, hareket zinciri, Fen Klasörü eski/yeni/ara parsel kayıtları, elle düzenlenen Fen kayıtlarının kilitlenmesi.
+- Önemli fonksiyonlar: `init_db`, `q`, `parsel_kontrol_oku`, `parsel_gosterim`, `parsel_otomatik_onay`, `fen_kayit_ekle`, `fen_kayit_guncelle`, `fen_senkronla`, `kayit_sil`, `kayit_geri`, `yedekle`, `App.load`, `App.parsel_sorgu_ac`, `App.parsel_sonuc_geldi`, `App.fen_*`.
 
 ### 2.2 TKGM Parsel Sorgulama — `parsel_sorgu_modulu.py`
 
-- Ana pencere: `App(tk.Toplevel)`. Ana uygulamadan `master`, `kaynak`, `takip_db`, `sonuc_geri_cagir` parametreleriyle açılabiliyor; bağımsız açılışta kendi Tk kök penceresini oluşturuyor.
-- TKGM servis kökü: `https://cbsapi.tkgm.gov.tr/megsiswebapi.v3.1/api`; Parsel Sorgu web adresi ve HTTP başlıkları da tanımlı.
-- Sorgu motoru: `query_one`, `analiz_et`, `tkgm_gittigi_kayitlar`, `devam_parsellerini_zincirle`, `hareket_adresi`, `get_json`, mahalle/il/ilçe kimlik eşleştirme fonksiyonları.
-- Pencere özellikleri: elle parsel ekleme, il/ilçe/mahalle seçimi, açık iş listesinden aktarım, kapanan işlerin parsellerini gizleme/gösterme, günlük istek sayacı/limit, otomatik tekrar kontrol, seçili/toplu sorgu, durum/alan/nitelik/yeni parseller ve hareket ayrıntısı.
-- Dosya/veri işlemleri: Excel şablonu oluşturma, Excel içe/dışa aktarma; yerel ayarlar ve TKGM liste önbelleği.
-- İş parçacığı kullanımı: idari listeler, iş listesinden aktarım ve sorgu çalıştırma arka plan thread'lerinde. UI güncellemeleri `after(...)` ile ana Tk döngüsüne yönlendiriliyor.
-- Ana sınıf ve fonksiyonlar: `App`, `Detay`, `HareketAyar`, `MahalleEslestir`, `db`, `query_one`, `takip_sonuc_yaz`, `aktarim_hazirla`, `start_queries`, `worker`, `export_excel`, `import_excel`.
+- Arayüz PySide6: `QMainWindow`, `QDialog`, `QWidget`, `QTableView`, `QAbstractTableModel`, `Signal`, `QThread`, `QTimer` kullanılıyor.
+- Ana sınıflar: `App(QMainWindow)`, `ParselModel(QAbstractTableModel)`, `Detay`, `HareketAyar`, `MahalleEslestir`, `AramaliKutu`, `DurumEtiketi`, `GrafikAlani`, `_Is(QThread)`.
+- Sorgu motoru ve iş mantığı: `query_one`, `analiz_et`, `tkgm_gittigi_kayitlar`, `devam_parsellerini_zincirle`, `hareket_adresi`, `get_json`, `mahalle_id_bul`, mahalle eşleştirme ve sonuç özeti fonksiyonları.
+- Kullanıcı özellikleri: elle parsel ekleme, il/ilçe/mahalle seçimi, açık iş listesinden aktarım, kapanmış iş parsellerini göster/gizle, günlük istek sayacı/limit, otomatik tekrar kontrol, seçili/toplu sorgu, durum/alan/nitelik/yeni parseller ve hareket detayları.
+- Dosya/veri işlemleri: Excel şablonu, Excel içe/dışa aktarma; ayarlar ve idari liste önbelleği.
+- İş parçacığı: `QThread` ve sinyallerle arka plan işlemleri; UI güncellemeleri sinyal-slot üzerinden. `threading.Event` sorguyu durdurma kontrolünde kullanılıyor.
+- Önemli fonksiyonlar: `db`, `get_json`, `query_one`, `takip_sonuc_yaz`, `aktarim_hazirla`, `App.illeri_yukle`, `App.is_listesinden_aktar`, `App.start_queries`, `App.worker`, `App.takibe_yaz`, `App.import_excel`, `App.export_excel`, `App.load_saved`.
 
-## 3. Veritabanı envanteri ve kritik ayrım
+**Sonuç:** TKGM tarafında yapılacak iş sıfırdan UI dönüşümü değil; mevcut PySide6 uygulamasının işlevsel eşdeğerliğini, entegrasyonunu ve Qt ana uygulamasına geçişini doğrulayıp eksikleri kapatmaktır.
 
-### 3.1 Encümen ana veritabanı
+## 3. SQLite envanteri
 
-Dosya yolu: `encumen_kayit.py` içinde `BASE / imar_kayitlari.db`.
+### 3.1 Encümen DB — `imar_kayitlari.db`
 
-Kaynakta oluşturulan/kullanılan tablolar:
-- `kayit`: Encümen iş kayıtları; `FIELDS/KEYS` içindeki alanlar ve sonradan eklenen `durum_tarihi`.
-- `ayar`: uygulama ayarları.
-- `liste`: mahalle, işlem, müellif ve onay listeleri.
-- `silinen`: 90 günlük geri alma arşivi.
-- `gorunum`: kayıtlı filtre/görünüm ayarları.
-- `parsel_kontrol`: TKGM sonucunun iş ID'sine göre saklandığı entegrasyon tablosu.
-- `fen_islem`, `fen_parsel`: Fen Klasörü işlem ve eski/yeni/ara parsel ilişkileri.
+Yol: `encumen_kayit.py` içindeki `BASE / imar_kayitlari.db`.
 
-`parsel_kontrol` alanları (iki dosyadaki DDL'de eşleşiyor):
-`work_id` (PK), `parsel_no`, `tkgm_mahalle`, `durum`, `alan`, `nitelik`, `islem_turu`, `islem_tarihi`, `yeni_parseller`, `nihai_aktifler`, `aciklama`, `son_kontrol`, `onay_bekliyor`, `zincir`.
+Kaynakta oluşturulan tablolar:
+- `kayit`: iş kayıtları; sütunlar `KEYS` listesinden oluşturuluyor, ayrıca `durum_tarihi` ekleniyor.
+- `ayar`: `ad` / `deger` ayarları.
+- `liste`: tür/değer listeleri.
+- `silinen`: silinen kayıtların 90 günlük geri alma arşivi.
+- `gorunum`: kayıtlı filtre/görünümler.
+- `parsel_kontrol`: TKGM sonuçları.
+- `fen_islem`: Fen Klasörü işlem başlıkları.
+- `fen_parsel`: işlem/parsel/rol ilişkileri; `fen_parsel_ix` indeksi.
 
-### 3.2 Parsel modülünün kendi veritabanı
+### 3.2 TKGM DB — `parsel_kayitlari.db`
 
-Dosya yolu: `parsel_sorgu_modulu.py` içinde `APP_DIR / parsel_kayitlari.db`; ek çıktı klasörü `APP_DIR / Sonuclar`.
+Yol: `parsel_sorgu_modulu.py` içindeki `APP_DIR / parsel_kayitlari.db`; `Sonuclar` klasörü de tanımlı.
 
 Tablolar:
-- `parcels`: il/ilçe/mahalle/ada/parsel, mahalle ID, alan, nitelik, koordinatlar, durum, açıklama ve hareket alanları.
-- `ayar`: kullanıcı seçimleri, günlük limit ve hareket servisi ayarları.
-- `sayac`: gün bazında istek sayacı.
-- `liste_onbellek`: TKGM idari liste yanıtları.
-- `is_parsel_bag`: İş Takip kayıt ID'si ile parsel arasındaki çoktan-çoğa bağlantı.
+- `parcels`: il, ilçe, mahalle, ada/parsel, mahalle ID, alan, nitelik, koordinat, durum, açıklama ve hareket bilgileri.
+- `ayar`: ayarlar.
+- `sayac`: gün bazında sorgu sayacı.
+- `liste_onbellek`: TKGM idari liste önbelleği.
+- `is_parsel_bag`: bir iş kaydı ile bir veya daha fazla parsel arasındaki bağ.
 - `mahalle_esleme`: İş Takip mahalle adı ile TKGM resmi mahalle/ID eşlemesi.
 
-**Bu iki DB aynı dosya değildir.** Parsel modülü kendi sonuçlarını önce `parsel_kayitlari.db` içinde tutar; İş Takip entegrasyonu için ayrıca `takip_db=imar_kayitlari.db` yolu verilir. İki DB'nin rolü karıştırılmamalı.
+İki DB farklı amaçla kullanılır; birleştirilmemeli ve dosya adları/konumları gelişigüzel değiştirilmemelidir. `DATA_DIR = APP_DIR / "Sonuclar"` ve `map_file` alanları mevcut kodda tanımlı; ancak sorgu worker'ında harita PNG'sinin üretilmediği açıkça belirtiliyor. Bu alan/klasörlerin hâlen kullanılan bir akış olup olmadığı ayrıca doğrulanmadan silinmemeli.
 
-### 3.3 Doğrulanmış entegrasyon sözleşmesi
+## 4. Kritik TKGM ↔ Encümen entegrasyon sözleşmesi
 
-1. Encümen, açık işlerden `(id, mahalle, ada_parsel)` kaynak listesini hazırlar.
-2. `App.parsel_sorgu_ac`, `parsel_sorgu_modulu.App(..., kaynak=kaynak, takip_db=DB, sonuc_geri_cagir=...)` çağrısıyla TKGM penceresini açar.
-3. Parsel modülü sorgu sonucunu `takip_sonuc_yaz(takip_db_yolu, work_id, row)` ile ana DB'deki `parsel_kontrol` tablosuna UPSERT eder.
-4. Sonuç yazma işlemi `kayit` tablosundaki iş verisini değiştirmez.
-5. `onay_bekliyor` davranışı önemlidir: pasife yeni düşen parsel için uyarı oluşturulur; zaten pasif olan kayıtta mevcut onay durumu korunur; aktif/belirsiz sonuçta uyarı sıfırlanır.
-6. Encümen tarafı `parsel_kontrol_oku` ile sonuçları okur; `fen_senkronla` pasif sonuçlardan Fen Klasörü kayıtlarını üretir/günceller. Elle düzenlenen/kilitli Fen kayıtlarının otomatik ezilmemesi gerekir.
-7. `sonuc_geri_cagir(work_id, ozet)` UI yenileme bildirimi olarak kullanılır.
+### 4.1 Tablo ve yazma davranışı
 
-**Bu sözleşme dönüşüm boyunca sabit kalmalı.** Tablo/kolon adları, PK, UPSERT alanları, `work_id` anlamı, onay geçiş mantığı ve callback anlamı değiştirilemez; değişiklik gerekirse önce ortak entegrasyon tasarımı ve veri geçiş testi yapılmalıdır.
+İki kaynakta da `parsel_kontrol` DDL'si eşleşiyor:
 
-## 4. PySide6 hedef mimarisi
+`work_id INTEGER PRIMARY KEY, parsel_no TEXT, tkgm_mahalle TEXT, durum TEXT, alan TEXT, nitelik TEXT, islem_turu TEXT, islem_tarihi TEXT, yeni_parseller TEXT, nihai_aktifler TEXT, aciklama TEXT, son_kontrol TEXT, onay_bekliyor INTEGER DEFAULT 0, zincir TEXT`.
 
-### 4.1 Önerilen yapı
+TKGM modülündeki `takip_sonuc_yaz(takip_db_yolu, work_id, row)`:
+- Encümen DB yoluna ayrı SQLite bağlantısı açıyor.
+- Gerekirse eski DB'ye `zincir` sütununu ekliyor.
+- `work_id` üzerinden UPSERT yapıyor.
+- `kayit` tablosundaki asıl iş kaydını değiştirmediğini docstring'de açıkça belirtiyor.
+- Pasife yeni düşen sonuçta `onay_bekliyor=1`; zaten pasif olan kayıtta önceki onay değeri korunuyor; Pasif dışındaki sonuçlarda onay sıfırlanıyor.
 
-İlk aşamada mevcut iş mantığını taşımadan yeniden yazmak yerine UI ile iş mantığını ayırın:
+### 4.2 Pencere açılışı ve callback
 
-- `core/`: mevcut iş kuralları, veri erişimi, TKGM sorgu/analiz, rapor ve yedekleme fonksiyonları.
-- `ui/`: PySide6 pencereleri, diyaloglar, modeller, delegate'ler ve stiller.
-- `services/`: arka plan görevleri ve iki modül arasındaki uygulama servis sözleşmesi.
-- `tests/`: geçici kopya veritabanlarıyla otomatik testler.
-- Mevcut iki kaynak dosya ilk geçişte referans/karşılaştırma olarak korunmalı; taşınan mantık birebir test edilmeden eski uygulama kodu silinmemeli.
+Encümen `App.parsel_sorgu_ac`:
+1. Açık işlerden `(id, mahalle, ada_parsel)` listesini hazırlar.
+2. `parsel_sorgu_modulu.App(s.root, kaynak=kaynak, takip_db=DB, sonuc_geri_cagir=s.parsel_sonuc_geldi)` çağrısını yapar.
+3. TKGM `takip_db` üzerinden `parsel_kontrol` tablosuna yazar; callback Encümen tablosunun gecikmeli yenilenmesini sağlar.
 
-Ortak başlatıcı/ana pencere kararı iki UI modülünün iskeleti görülmeden kesinleştirilmemeli. Öneri: Encümen ana pencere; TKGM pencere hem bağımsız çalıştırılabilir hem Encümen içinden açılabilir bir `QDialog` veya `QMainWindow` olsun.
+TKGM modülünün `App` kurucusu `master`, `kaynak`, `takip_db`, `sonuc_geri_cagir` parametrelerini kabul ediyor. `sonuc_geri_cagir(work_id, ozet)` sözleşmesi korunmalı.
 
-### 4.2 UI dönüşüm ilkeleri
+### 4.3 Fen Klasörü ve onay
 
-- Encümen: ana kayıt tablosu için `QTableView` + `QAbstractTableModel`; sıralama/filtreleme için `QSortFilterProxyModel`. Satır renklendirme, sütun gizleme, çoklu seçim, detay paneli, kayıt/form pencereleri ve Grafik/Fen Klasörü sekmeleri korunmalı.
-- TKGM: parsel listesi için model/view; durum renkleri, çoklu seçim, ilerleme çubuğu, sayaç, filtre/gizleme ve detay/hareket görünümü korunmalı.
-- Tema, yazı boyutu, sütun görünürlüğü, pencere/kolon durumu ve kullanıcı tercihleri mevcut ayar anahtarlarıyla uyumlu saklanmalı.
-- Dosya seçme/açma, Excel/CSV, HTML rapor, yedek/geri yükleme ve ikon davranışları için mevcut kullanıcı akışı korunmalı.
-- İşlevsel eşdeğerlik sağlanmadan görsel sadeleştirme veya özellik kaldırma yapılmamalı.
+- Encümen `parsel_kontrol_oku` ile sonuçları okuyor.
+- `parsel_otomatik_onay`, iş durumu Tescillendi olduğunda bekleyen pasif-parsel uyarısını kaldırıyor.
+- `fen_senkronla`, pasif sonuçlardan Fen Klasörü kayıtları üretiyor/güncelliyor; eski/yeni/ara parselleri, alan/nitelik ve zinciri kullanıyor.
+- Elle düzenlenmiş/kilitlenmiş Fen kayıtları otomatik senkronizasyonda ezilmemeli; “TKGM sonucuna dön” akışı korunmalı.
 
-### 4.3 Sinyal-slot ve iş parçacığı
+### 4.4 Geçiş köprüsü ve doğrulanması gereken uyumsuzluk
+
+TKGM dosyasında `_tk_koprusu(master)` fonksiyonu, TKGM Qt penceresi eski Tk tabanlı Encümen'den açıldığında `master.after(15, ... qapp.processEvents())` ile Qt olaylarını Tk döngüsünden işletiyor. Bu, **geçiş dönemi köprüsü** olarak yorumlanmalı; kalıcı mimari olmamalı.
+
+Encümen'in mevcut `parsel_sorgu_ac` fonksiyonunda açık pencere kontrolü `p.winfo_exists()` ile yapılıyor. TKGM penceresi artık Qt `QMainWindow` olduğundan bu metot Qt penceresinde bulunmaz; tekrar açma akışı `AttributeError` üretebilir ve mevcut `except tk.TclError` bunu yakalamaz. Bu, gerçek kaynak kodundan görülen somut entegrasyon riskidir. Encümen Qt dönüşümünde pencere referansı/yaşam döngüsü `QWidget` API'siyle yönetilmeli; TKGM hesabı Encümen dosyasını değiştirmemelidir.
+
+## 5. PySide6 hedef mimarisi
+
+### 5.1 Encümen tarafı (gerçek dönüşüm işi)
+
+- İş kuralları, SQLite işlemleri, tarih/para/parsel hesapları ve rapor üretimi UI'dan ayrıştırılmalı; mümkün olduğunca mevcut fonksiyonlar korunup servis/repository katmanına taşınmalı.
+- Kayıt tablosu için `QTableView + QAbstractTableModel`; sıralama/filtre için `QSortFilterProxyModel`.
+- Form, takvim, listeler, toplu güncelleme, son silinenler, rapor ayarı, pasif parsel ve Fen Klasörü pencereleri Qt karşılıklarına taşınmalı.
+- Grafikler, detay paneli, tema, yazı boyutu, sütun görünürlüğü, kayıtlı görünümler, kısayollar ve çoklu seçim korunmalı.
+- HTML/CSV, dosya seçme/açma, ağ klasörü indeksleme ve yedek/geri yükleme davranışları korunmalı.
+
+### 5.2 TKGM tarafı (mevcut PySide6 kodunu sağlamlaştırma)
+
+- Var olan `QMainWindow`, `ParselModel`, `QThread` ve sinyal-slot yapısını temel al; sıfırdan yeniden yazma.
+- Özellik/iş kuralı eşleştirme tablosu çıkar; mevcut Tk sürümünden taşınmış olduğu iddia edilen davranışların güncel kodda gerçekten bulunduğunu doğrula.
+- Encümen Qt olduğunda TKGM penceresinin nasıl açılacağı için açık bir Qt entegrasyon API'si tanımla (Qt parent, pencere referansı, yaşam döngüsü, callback/sinyal). Eski Tk köprüsünü geçiş dönemi için koru; Encümen hesabının işi tamamlanmadan kaldırma.
+- Sorgu motoru, TKGM API uçları, hareket zinciri, mahalle eşleştirme, limit/bekleme, Excel ve DB davranışlarını değiştirme.
+
+### 5.3 Ortak arayüz ilkeleri
 
 - Qt widget'larına yalnız GUI ana thread'inden erişilsin.
-- Ağ sorguları, toplu Excel işlemleri, büyük veri yüklemeleri ve dosya indeksleme için `QThread` + worker-object veya `QThreadPool/QRunnable` kullanılsın.
-- Worker; ilerleme, durum, sonuç, hata ve tamamlandı sinyallerini yayınlasın. UI bu sinyalleri queued connection ile alsın.
-- Worker içinden doğrudan widget değiştirmek, `QApplication.processEvents()` ile UI zorlamak veya Tkinter `after` yaklaşımını taşımak yasak.
-- İptal/durdurma, günlük limit, istekler arası bekleme, timeout ve hata sınıfları (limit/erişim/diğer) aynı davranışı korusun.
-- Pencere kapanırken worker'lar kontrollü durdurulsun; arka plan işlemi sürerken uygulamanın kapanması veri kaybı yaratmamalı.
+- Uzun ağ/dosya işleri worker-object + `QThread` veya `QThreadPool/QRunnable` ile çalışsın.
+- Worker'lar ilerleme, durum, sonuç, hata ve tamamlandı sinyalleri yayınlasın; GUI yalnız sinyallerle güncellensin.
+- Worker içinden widget değiştirme, Tk `after` çağrısını Qt worker'a taşıma veya `processEvents()` ile UI zorlamak yasak.
+- İptal/durdurma, pencere kapanışı, timeout, limit ve bekleme kuralları güvenli olmalı.
+- Ortak tema ve etkileşim ilkeleri tutarlı olsun; fakat iki modülün bağımsız test edilebilirliği korunsun.
 
-### 4.4 Veritabanı erişim sözleşmesi
+### 5.4 Veritabanı erişim sözleşmesi
 
-- Var olan DB dosya adları ve konumları varsayılan olarak değiştirilmeyecek: `imar_kayitlari.db`, `parsel_kayitlari.db`.
-- Şema yükseltmeleri mevcut `CREATE TABLE IF NOT EXISTS` / kontrollü `ALTER TABLE` davranışını korumalı; yeni migration yalnızca açıkça gerekli ve geriye uyumluysa eklenmeli.
-- İlk PySide6 açılışı canlı kullanıcı DB'sinde değil, kopya DB üzerinde test edilmeli.
-- Bağlantılar kısa ömürlü ve işlem sınırları belirgin olmalı; her yazma `commit`/rollback güvenliğiyle yapılmalı. Eşzamanlı erişimde timeout ve SQLite kilitlenme davranışı test edilmeli.
-- `parsel_kontrol` yazımı için tek bir ortak servis/repository fonksiyonu tercih edilmeli; iki tarafta farklı DDL veya farklı UPSERT mantığı kopyalanmamalı.
-- `work_id` integer kimliği Encümen `kayit.id` ile eşleşmeye devam etmeli.
-- WAL modu gibi performans ayarları canlı DB'de ölçüm ve yedek/geri dönüş planı olmadan etkinleştirilmemeli.
+- Varsayılan DB yolları ve dosya adları korunmalı: `imar_kayitlari.db`, `parsel_kayitlari.db`.
+- Mevcut şemalar, PK'ler, kolon adları ve migration davranışları korunmalı.
+- Gerçek DB üzerinde ilk test/migration yapılmamalı; kopya DB ve sentetik veri kullanılmalı.
+- Her yazma işlemi açık transaction/commit/rollback sınırına sahip olmalı; bağlantı timeout ve eşzamanlı yazma test edilmeli.
+- `parsel_kontrol` DDL/UPSERT tek bir sözleşme olarak ele alınmalı; iki tarafta farklı kolon veya farklı `onay_bekliyor` mantığı oluşturulmamalı.
+- `work_id`, Encümen `kayit.id` anlamını korumalı.
+- WAL gibi SQLite ayarları ölçüm ve geri dönüş planı olmadan açılmamalı.
 
-## 5. Bağımlılıklar ve paketleme
+## 6. Bağımlılıklar ve paketleme
 
-Mevcut `requirements.txt`:
-- `requests>=2.31.0`
-- `openpyxl>=3.1.2`
+Güncel `requirements.txt` zaten `PySide6>=6.6,<7` içeriyor; ayrıca `requests` ve `openpyxl` korunmalı. Dolayısıyla PySide6'yı yeniden eklemek gerekmiyor. Python sürümü, EXE aracı ve paketleme betikleri bu incelemede tam doğrulanmadı; EXE aşamasından önce ayrıca incelenmeli.
 
-PySide6 henüz ekli değil. Dönüşüm tamamlandığında `PySide6` sabitlenmiş/uyumlu bir sürüm aralığıyla eklenmeli; kesin sürüm mevcut Python sürümü ve EXE paketleme aracı doğrulandıktan sonra seçilmeli. `requests` ve `openpyxl` korunmalı. Şu anki kaynaklarda Pillow import'u görünmüyor; yalnızca bu nedenle Pillow eklenmemeli. Kullanılmayan bağımlılıklar kanıt olmadan silinmemeli.
+`ENTEGRASYON.txt` kurulum notunda requirements içeriğini “requests, openpyxl” diye özetliyor; bu bilgi artık eksik, çünkü güncel requirements PySide6 da içeriyor. Belge güncellemesi ayrı ve kontrollü bir dokümantasyon işi olarak ele alınabilir. `exe_yap.bat`, `kisayol_olustur.bat`, `encumen.ico` dosyalarının içerikleri bu görevde açılmadı; `ENTEGRASYON.txt` bunların değişmediğini söylüyor, ancak paketleme davranışları doğrulanmış sayılmaz.
 
-Python sürümü, PyInstaller/Nuitka kullanımı, `exe_yap.bat`, `kisayol_olustur.bat`, `encumen.ico` içerikleri bu görevde ayrıntılı incelenmedi; paketleme öncesi ayrıca doğrulanmalı. ENTEGRASYON.txt bu dosyaların değişmediğini söylüyor, fakat içeriklerinin güncel projeyle uyumu henüz doğrulanmış değil.
+## 7. İki hesaba görev dağılımı ve branch sınırları
 
-## 6. İki hesaba görev dağılımı
+İki hesap aynı dosyayı eşzamanlı düzenlememeli. Her hesap kendi branch'inde çalışmalı; doğrudan `main` dalına commit/merge yapılmamalı.
 
-İki hesap ayrı branch'lerde çalışmalı; aynı dosyalara eşzamanlı yazmamalı.
-
-### Hesap 1 — Encümen PySide6
+### Hesap 1 — Encümen'in Tkinter → PySide6 dönüşümü
 
 - Branch: `feature/pyside6-encumen`
-- Sahip olduğu kapsam: yalnız `encumen_kayit.py` dönüşümü ve kendisine ait yeni Encümen UI/core/test dosyaları.
-- `parsel_sorgu_modulu.py` üzerinde değişiklik yapmayacak.
-- TKGM sorgu motorunu yeniden yazmayacak; entegrasyonun karşı tarafını sabit sözleşmeye göre çağıracak.
-- `parsel_kontrol` DDL/UPSERT alanlarını ve `sonuc_geri_cagir` imzasını değiştirmeyecek.
-- Teslim: Encümen PySide6 arayüzü, işlev eşleştirme tablosu, testler, değişen dosya listesi, çalıştırma yönergesi.
+- Kapsam: yalnız `encumen_kayit.py` ve Encümen'e ait yeni Qt UI/core/test dosyaları.
+- `parsel_sorgu_modulu.py` dosyasına dokunma.
+- TKGM sorgu motorunu yeniden yazma.
+- `parsel_kontrol` DDL/kolonları/UPSERT ve `sonuc_geri_cagir(work_id, ozet)` sözleşmesini değiştirme.
+- TKGM Qt penceresini QWidget/QMainWindow yaşam döngüsüyle aç; mevcut `winfo_exists()` kontrolünü Qt uyumlu hale getir.
+- Fen Klasörü kilit/geri dön davranışını, pasif onay geçişlerini ve tüm Encümen özelliklerini koru.
 
-### Hesap 2 — TKGM Parsel PySide6
+### Hesap 2 — Mevcut TKGM PySide6 dönüşümünü doğrulama ve tamamlama
 
-- Branch: `feature/pyside6-parsel`
-- Sahip olduğu kapsam: yalnız `parsel_sorgu_modulu.py` dönüşümü ve kendisine ait yeni TKGM UI/core/worker/test dosyaları.
-- `encumen_kayit.py` üzerinde değişiklik yapmayacak.
-- TKGM API uç noktalarını, sorgu başına istek sayısını, hareket zinciri çözümünü, mahalle eşlemesini, günlük limit ve bekleme kurallarını değiştirmeyecek.
-- `takip_db` yolunu, `takip_sonuc_yaz` davranışını ve `sonuc_geri_cagir(work_id, ozet)` sözleşmesini koruyacak.
-- Teslim: TKGM PySide6 penceresi, bağımsız/entegre çalışma testi, testler, değişen dosya listesi, çalıştırma yönergesi.
+- Branch: `feature/pyside6-parsel-review`
+- Kapsam: yalnız `parsel_sorgu_modulu.py` ve TKGM'ye ait yeni test/dokümantasyon dosyaları.
+- **Bu modül zaten PySide6 olduğundan sıfırdan dönüşüm yapma.** Mevcut UI'nın tüm özelliklerini ve önceki iş akışlarını doğrula; gerçek eksikleri yalnız bu modülde düzelt.
+- Encümen Qt ana penceresinin kullanacağı parent/sinyal/callback/pencere yaşam döngüsü sözleşmesini dokümante et.
+- Mevcut Tk ana uygulamasıyla geçiş uyumluluğunu koru; `_tk_koprusu` kaldırılacaksa ancak entegrasyon branch'inde ve Encümen Qt ana penceresi hazır olduğunda karar verilsin.
+- `encumen_kayit.py` dosyasına dokunma; `parsel_kontrol` sözleşmesini değiştirme.
 
 ### Her iki hesap için ortak yasaklar
 
-- `modern_tasarim.py` dosyasını açma, analiz etme, içe aktarma veya kullanma.
-- Diğer hesabın sahip olduğu kaynak dosyaya müdahale etme.
-- Ana dala doğrudan commit/push/merge yapma.
-- Gerçek kullanıcı veritabanını açma, değiştirme veya migration çalıştırma.
-- Mevcut özellikleri sessizce kaldırma veya iş mantığını “daha iyi” olduğu varsayımıyla değiştirme.
-- Bir modülün henüz tamamlanmamış diğer modülün UI sınıflarına doğrudan bağımlı olmasını sağlama.
-- Her görev sonunda test çıktısı, değişen dosya listesi ve bilinen eksikleri raporla.
+- `modern_tasarim.py` dosyasını açma, analiz etme, import etme veya kullanma.
+- Diğer hesabın sahip olduğu dosyalara müdahale etme.
+- `main` dalına doğrudan commit/push/merge yapma.
+- Gerçek kullanıcı DB'sini açma, değiştirme veya migration çalıştırma.
+- Özellik kaldırma, iş kuralı değiştirme veya şema değişikliği yapma.
+- Her aşamada değişen dosyaları, test sonuçlarını ve bilinen eksikleri raporla.
 
-## 7. Aşamalı uygulama ve birleştirme
+## 8. Aşamalar ve birleştirme
 
-1. **Ortak sözleşmeyi dondur:** DB yolları/tabloları, `parsel_kontrol` alanları, callback ve hata/sonuç sözleşmesi.
-2. **İş mantığı/UI ayrımı:** her hesap kendi modülünde önce mevcut fonksiyonları UI bağımlılığından ayırıp test edilebilir hale getirsin.
-3. **Encümen UI:** kayıt tablosu, filtreler, formlar, detaylar, grafikler, Fen Klasörü, rapor, yedek, dosya ve CSV akışları.
-4. **TKGM UI:** konum seçimi, iş aktarımı, parsel listesi, sorgu worker'ı, ilerleme/sayaç, detay/hareket zinciri, Excel akışları.
-5. **Tekil modül testleri:** her modül kendi branch'inde sentetik/geçici DB ile test edilsin.
-6. **Entegrasyon branch'i:** iki branch, ana dala değil, ayrı bir `integration/pyside6` branch'ine sırayla birleştirilsin. Çakışmalar ve ortak sözleşme burada çözülsün.
-7. **Regresyon testi:** aşağıdaki senaryolar geçmeden canlı DB'ye geçilmesin.
-8. **Paketleme:** temiz Windows ortamında kurulum/EXE, dosya yolları, ikon, yedek ve güncelleme davranışı doğrulansın.
-9. **Canlı geçiş:** kullanıcı önce yedek alsın; ilk açılış öncesi otomatik migration kopya DB'de doğrulanmış olsun. Geri dönüş için eski EXE ve DB yedeği saklansın.
+1. **Sözleşmeyi dondur:** DB yolları/şemaları, `parsel_kontrol` alanları, onay mantığı, callback ve Qt pencere API'si.
+2. **Encümen dönüşümü:** Hesap 1 iş mantığını koruyarak UI'yı Qt'ye taşısın.
+3. **TKGM doğrulaması:** Hesap 2 mevcut PySide6 UI'nın özellik eşitliğini, worker/iptal/kapanış davranışını ve entegrasyon API'sini test etsin.
+4. **Tekil testler:** Her branch geçici DB ve mock TKGM yanıtlarıyla kendi testlerini çalıştırsın.
+5. **Entegrasyon dalı:** İki branch `integration/pyside6` dalına alınsın; ana dal doğrudan hedef olmasın.
+6. **Qt-Qt bağlantısı:** TKGM penceresi Qt parent ile açılıp kapansın; callback veya Qt sinyaliyle Encümen yenilensin; eski Tk köprüsü yalnız artık kullanılmadığı kanıtlanınca kaldırılmalı.
+7. **Regresyon ve paketleme:** Aşağıdaki testler geçmeden canlı DB/EXE dağıtımı yapılmasın.
+8. **Canlı geçiş:** Önce yedek; ilk açılış kopya DB'de doğrulanmış migration ile; eski sürüm ve DB yedeği geri dönüş için saklanmalı.
 
-## 8. Zorunlu test kontrol listesi
+## 9. Zorunlu test listesi
 
-- Eski DB kopyasıyla açılış: kayıt sayısı, ID'ler, alanlar ve listeler aynı.
-- Yeni şema ekleme: yalnız beklenen kolonlar ekleniyor; mevcut veri değişmiyor.
-- Kayıt ekleme/düzenleme/silme/geri alma/90 günlük son silinenler.
-- Türkçe arama/sıralama, tarih ve para biçimleri, filtreler, toplu işlem.
-- Karar/makbuz dosyası yolları; erişilemeyen ağ klasörü ve taşınmış dosya davranışı.
-- Rapor, Excel/CSV içe/dışa aktarma, yedek/geri yükleme.
-- Parsel modülünde manuel giriş, Excel içe/dışa aktarma, idari liste önbelleği ve mahalle eşlemesi.
-- TKGM aktif, pasif, belirsiz, erişim hatası, limit hatası, zaman aşımı ve hareket servisi hatası.
-- Günlük istek sayacı, bekleme aralığı, aktif parsel yenileme süresi ve kapanmış işlerin sorgulanmaması.
-- Pasif parselin tüm devam/aktif parselleri ve hareket zinciri.
-- İş listesinden aktarım: tek parselin birden çok işe bağlanması ve birden çok parselin eşleşmesi.
-- `parsel_kontrol` UPSERT: ilk pasif sonuçta onay=1; pasif kalırken mevcut onay korunur; aktif/belirsiz sonuçta onay=0.
-- Encümen'in TKGM sonucunu okuması, Fen Klasörü'ne senkronlaması, elle kilitli kaydı ezmemesi ve “TKGM sonucuna dön” davranışı.
-- Ağ/DB yavaşken UI donmaması; worker tamamlanmadan pencere kapanışının güvenli olması.
-- Bağımsız TKGM açılışı ve Encümen içinden açılışı.
+- Eski DB kopyasında kayıt sayısı, ID, kolon ve listeler değişmiyor.
+- Şema yükseltmesi yalnız gerekli kolonları ekliyor; veri kaybı yok.
+- Encümen kayıt ekle/düzenle/sil/geri al, 90 günlük arşiv, filtreler, kayıtlı görünümler, Türkçe arama/sıralama.
+- Tarih/para hesapları, bekleme günleri, arşiv ve durum geçişleri.
+- Karar/makbuz dosya yolları; ağ paylaşımı yokken ve dosya taşındığında davranış.
+- HTML rapor, grafik, CSV/Excel akışları, yedek ve geri yükleme.
+- TKGM manuel giriş, iş listesinden aktarım, mahalle eşleştirme, Excel içe/dışa aktarma.
+- TKGM aktif/pasif/belirsiz/hata, timeout, limit ve hareket servisi hatası.
+- Günlük istek limiti, istek aralığı, aktif parsel tekrar kontrol süresi ve kapalı işlerin sorgulanmaması.
+- Pasif parsel hareket zinciri, ara pasifler ve nihai aktif parseller.
+- `is_parsel_bag` çoklu iş/parsel ilişkileri.
+- `parsel_kontrol` UPSERT: ilk pasif sonuç onay=1; pasif kalırken önceki onay korunur; pasif dışı sonuçta onay=0.
+- Encümen'in TKGM sonucunu okuyup Fen Klasörü'ne senkronlaması; elle kilitli kayıt ezilmemesi; “TKGM sonucuna dön”.
+- TKGM penceresinin Encümen'den art arda açılma/öne getirilme/kapatılma senaryosu; mevcut `winfo_exists()` Qt uyumsuzluğu giderilmiş olmalı.
+- Qt worker'ı sürerken pencere kapatma/iptal; UI donmaması ve thread kapanışında çökme olmaması.
+- TKGM'nin bağımsız Qt açılışı ve Qt Encümen içinden açılışı.
+- Windows temiz ortamında requirements kurulumu ve EXE paketlemesi.
 
-## 9. Açık riskler / doğrulanması gerekenler
+## 10. Çözülmesi gereken riskler
 
-1. **Aynı fiziksel DB dosyasına eşzamanlı yazma:** iki uygulama aynı anda çalışırsa SQLite kilitlenmesi/yarım kalmış işlem riski test edilmeli.
-2. **İşlem thread'leri:** TKGM sorgusu ve sonuç yazımı arka planda; UI callback'leri Qt sinyalleriyle ana thread'e alınmalı.
-3. **Bağımsız ve entegre çalışma:** TKGM modülü kendi DB'sini ve opsiyonel İş Takip DB'sini kullanıyor. İki modun da korunması gerekiyor.
-4. **Dosya yolu ve EXE:** `BASE/APP_DIR` davranışı EXE, kaynak kod, ağ klasörü ve yazma izni senaryolarında doğrulanmalı.
-5. **Dış TKGM servisi:** API yanıt şeması ve hareket servisi değişebilir; canlı servis olmadan testler mock/fikstür kullanmalı, gerçek servis testi ayrıca yapılmalı.
-6. **Sürüm/paketleme:** Python ve EXE aracı sürümleri bu inceleme kapsamındaki dosyalardan kesinleşmiyor.
-7. **UI kapsamı büyük:** Encümen tarafında çok sayıda yardımcı pencere ve özel etkileşim var; yalnız ana tabloyu taşımak tamamlanmış dönüşüm sayılmaz.
-8. **İki branch entegrasyonu:** her iki uygulama da ortak başlatıcı veya ortak veri servisinde değişiklik isterse bu kısım önceden atanmalı; aynı dosyayı iki hesap düzenlememeli.
+1. **Mevcut Qt/Tk hibrit bağlantısı:** TKGM Qt penceresi şu an Tk `after` köprüsüne sahip. Encümen Qt'ye geçince bu ara katmanın nasıl kaldırılacağı planlanmalı.
+2. **Pencere yaşam döngüsü hatası:** Encümen'deki `winfo_exists()` Qt penceresinde bulunmuyor; tekrar açma akışı düzeltilmeli.
+3. **SQLite eşzamanlı yazma:** İki DB ve özellikle ortak `parsel_kontrol` yazımı eşzamanlılık altında test edilmeli.
+4. **Worker güvenliği:** Worker'dan widget erişimi ve pencere kapanışında thread yaşam döngüsü kontrol edilmeli.
+5. **TKGM dış servisi:** Canlı servis değişebilir; otomatik testler kayıtlı JSON/mock yanıtlarla çalışmalı.
+6. **Paketleme:** Python/EXE aracı sürümü, ikon, göreli yollar ve yazma izinleri ayrıca doğrulanmalı.
+7. **Doküman uyumsuzluğu:** `ENTEGRASYON.txt` requirements özetinde PySide6'dan söz etmiyor; kurulum notu güncellenmeli.
+8. **Harita/çıktı artıkları:** `DATA_DIR` ve `map_file` tanımları mevcut, ancak sorgu worker'ı harita PNG üretmediğini belirtiyor; kullanılmayan alan/klasör olduğu kanıtlanmadan kaldırılmamalı.
 
-## 10. Hesaplara verilecek hazır görev metinleri
+## 11. Hesaplara verilecek hazır görev talimatları
 
 ### Hesap 1'e gönderilecek metin
 
-> Bu görevde yalnız Encümen/İş Takip uygulamasını PySide6'ya dönüştür. Kaynak: `encumen_kayit.py`. Önce `DONUSUM_PLANI.md` belgesini oku ve Encümen bölümünü uygula. `modern_tasarim.py` eski ve uygulanmamış ayrı bir çalışmadır; kesinlikle açma, analiz etme veya kullanma. TKGM modülü `parsel_sorgu_modulu.py` başka hesap tarafından geliştirilecek; bu dosyaya dokunma. TKGM entegrasyon sözleşmesini koru: `imar_kayitlari.db` içindeki `parsel_kontrol` tablosu, kolonlar, `work_id`, onay geçiş mantığı ve `sonuc_geri_cagir(work_id, ozet)` imzası değişmeyecek. İş kurallarını, hesaplamaları, kayıtları, filtreleri, Fen Klasörü, grafik, rapor, dosya, CSV, yedek ve geri yükleme özelliklerini eksiksiz koru. Gerçek DB'yi kullanma; test için kopya DB üret. Sadece `feature/pyside6-encumen` branch'inde çalış. TKGM dosyasını, ana dalı veya diğer hesabın dosyalarını değiştirme. Önce analiz ve dönüşüm adımlarını küçük commit'lerle yap; her aşamada test et. Sonunda değişen dosyaları, test sonuçlarını, eksikleri ve çalıştırma talimatını bildir. Özellik kaldırma veya şema değiştirme yapma.
+> Yalnız Encümen/İş Takip uygulamasının Tkinter → PySide6 dönüşümünü yap. Kaynak dosya `encumen_kayit.py`; önce `DONUSUM_PLANI.md` belgesini oku. `modern_tasarim.py` eski ve uygulanmamış ayrı bir denemedir; kesinlikle açma, analiz etme veya kullanma. TKGM modülü `parsel_sorgu_modulu.py` zaten PySide6 arayüzüne sahip ve başka hesap tarafından denetlenecek; bu dosyaya dokunma. Encümen'in iş kurallarını, tarih/para/parsel hesaplarını, kayıt/filtre/rapor/grafik/Fen Klasörü/dosya/CSV/yedek özelliklerini eksiksiz koru. Gerçek DB'yi kullanma; yalnız kopya DB ile test et. `imar_kayitlari.db` şemasını ve `parsel_kontrol` tablosunun kolonlarını değiştirme. TKGM'nin `takip_db`, `work_id`, `onay_bekliyor` ve `sonuc_geri_cagir(work_id, ozet)` sözleşmesini koru. Önemli: mevcut `parsel_sorgu_ac` içinde Qt penceresine `winfo_exists()` çağrısı yapılıyor; bunu Qt pencere yaşam döngüsüne uygun şekilde düzelt. TKGM penceresini QWidget/QMainWindow parent ile açabilecek biçimde entegre et; TKGM kaynak dosyasını değiştirme. Yalnız `feature/pyside6-encumen` branch'inde çalış. Ana dala commit/merge yapma. Sonunda değişen dosyaları, testleri, eksikleri ve çalıştırma talimatını bildir.
 
 ### Hesap 2'ye gönderilecek metin
 
-> Bu görevde yalnız TKGM Parsel Sorgulama modülünü PySide6'ya dönüştür. Kaynak: `parsel_sorgu_modulu.py`. Önce `DONUSUM_PLANI.md` belgesini oku ve TKGM bölümünü uygula. `modern_tasarim.py` eski ve uygulanmamış ayrı bir çalışmadır; kesinlikle açma, analiz etme veya kullanma. Encümen ana uygulaması `encumen_kayit.py` başka hesap tarafından geliştirilecek; bu dosyaya dokunma. TKGM sorgu motorunu, API uç noktalarını, hareket zincirini, mahalle eşlemesini, istek sayacı/limiti, bekleme aralığını, Excel akışlarını ve yerel `parsel_kayitlari.db` verisini koru. Entegrasyon sözleşmesi değişmeyecek: `takip_db` parametresiyle verilen `imar_kayitlari.db` dosyasındaki `parsel_kontrol` tablosuna aynı kolonlarla UPSERT yap; `onay_bekliyor` mantığını ve `sonuc_geri_cagir(work_id, ozet)` callback'ini koru. Modül hem bağımsız hem Encümen içinden açılabilir olmalı. Gerçek DB'yi kullanma; test için kopya DB üret. Sadece `feature/pyside6-parsel` branch'inde çalış. Encümen dosyasını, ana dalı veya diğer hesabın dosyalarını değiştirme. Sonunda değişen dosyaları, test sonuçlarını, eksikleri ve çalıştırma talimatını bildir. Özellik kaldırma veya şema değiştirme yapma.
+> Yalnız TKGM Parsel Sorgulama modülünün mevcut PySide6 uygulamasını denetle ve eksiklerini tamamla. Kaynak dosya `parsel_sorgu_modulu.py`; önce `DONUSUM_PLANI.md` belgesini oku. **Bu dosya zaten PySide6'ya dönüştürülmüş durumda; sıfırdan Tkinter→Qt dönüşümü yapma ve mevcut çalışan yapıyı gereksiz yere yeniden yazma.** `modern_tasarim.py` eski ve uygulanmamış ayrı bir denemedir; kesinlikle açma, analiz etme veya kullanma. Encümen ana uygulaması `encumen_kayit.py` başka hesap tarafından Qt'ye dönüştürülecek; bu dosyaya dokunma. Mevcut TKGM sorgu motorunu, API uçlarını, hareket zincirini, mahalle eşleştirmesini, günlük limit/bekleme, Excel akışlarını ve `parsel_kayitlari.db` verisini koru. `takip_db` ile verilen `imar_kayitlari.db` içindeki `parsel_kontrol` UPSERT alanlarını ve `onay_bekliyor` geçiş mantığını değiştirme. `sonuc_geri_cagir(work_id, ozet)` callback sözleşmesini koru. Qt Encümen'in kullanacağı pencere parent, callback/sinyal ve pencere yaşam döngüsü API'sini netleştir; eski Tk ana uygulamasıyla geçiş köprüsünü, Encümen dönüşümü tamamlanmadan bozma. Worker thread'lerinin GUI'ye yalnız sinyallerle eriştiğini, iptal ve kapanış davranışını test et. Yalnız `feature/pyside6-parsel-review` branch'inde çalış. Ana dala commit/merge yapma. Sonunda doğruladığın özellikleri, değiştirdiğin dosyaları, test sonuçlarını ve eksikleri bildir.
 
 ---
 
-**İnceleme sınırı:** Kaynak kodları statik olarak okundu; uygulamalar çalıştırılmadı, TKGM'ye canlı istek atılmadı, DB dosyası açılmadı ve test verisi üretilmedi. Bu nedenle davranışa ilişkin doğrulamalar kaynak kodundaki tanımlar ve entegrasyon notlarıyla sınırlıdır.
+**İnceleme sınırı:** Kaynak dosyalar GitHub `main` dalından statik olarak okundu. Uygulamalar çalıştırılmadı, canlı TKGM isteği yapılmadı, gerçek SQLite DB açılmadı veya değiştirilmedi. Çalışma zamanı davranışları ve paketleme testleri sonraki aşamada yapılmalıdır.
