@@ -139,25 +139,27 @@ QLineEdit, QSpinBox, QDateEdit, QComboBox, QTextEdit, QPlainTextEdit {{
 QLineEdit:focus, QSpinBox:focus, QDateEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border:1px solid {t['VURGU']}; }}
 QLineEdit:disabled, QComboBox:disabled {{ background:{t['BASLIK']}; color:{t['SOLUK']}; }}
 QComboBox {{ padding:4px 9px; min-height:22px; }}
-/* Açılır liste popup'ları: tablo hücreleri ve sütun başlıklarının stiline karışmaz */
+/* Açılır listeler: sağ tık QMenu ile aynı renk, kenarlık ve satır vurgusu.
+   Yalnızca ComboBox/Completer popup'larına uygulanır; tablo başlıklarına dokunmaz. */
 QComboBox QAbstractItemView, QCompleter QAbstractItemView {{
     background:{t['BASLIK']}; color:{t['METIN']};
-    border:1px solid {t['KENAR']}; border-radius:8px;
+    border:1px solid {t['KENAR']}; border-radius:9px;
     outline:0; padding:5px;
     selection-background-color:{t['VURGU']}; selection-color:#FFFFFF;
 }}
 QComboBox QAbstractItemView::item, QCompleter QAbstractItemView::item {{
-    min-height:24px; padding:6px 10px; margin:1px 2px;
-    border:1px solid transparent; border-radius:5px;
-    color:{t['METIN']}; background:{t['KART']};
+    background:{t['KART']}; color:{t['METIN']};
+    padding:6px 11px; margin:2px 3px;
+    min-height:17px; border:1px solid {t['KENAR']};
+    border-radius:6px;
 }}
 QComboBox QAbstractItemView::item:hover, QCompleter QAbstractItemView::item:hover {{
-    background:{t['BHOV']}; color:{t['VURGU_K']};
-    border:1px solid {t['KENAR']};
+    background:{t['VURGU']}; color:#FFFFFF;
+    border:1px solid {t['VURGU']}; font-weight:600;
 }}
 QComboBox QAbstractItemView::item:selected, QCompleter QAbstractItemView::item:selected {{
-    background:{t['VURGU']}; color:#FFFFFF; font-weight:600;
-    border:1px solid {t['VURGU']};
+    background:{t['VURGU']}; color:#FFFFFF;
+    border:1px solid {t['VURGU']}; font-weight:600;
 }}
 QTableView QLineEdit {{ border-radius:0px; padding:0px 4px; border:1px solid {t['VURGU']}; }}
 QComboBox QLineEdit {{ border:none; background:transparent; padding:0px; }}
