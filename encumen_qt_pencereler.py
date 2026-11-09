@@ -486,7 +486,7 @@ class Silinenler(QtWidgets.QDialog):
 
 # ---------------------------------------------------------------- Pasif parseller
 class PasifListe(QtWidgets.QDialog):
-    """Pasife düşen parsellerin listesi: alan, nitelik, yeni parseller, işlem. Çift tık: parsel hareket özeti."""
+    """Pasife düşen parsellerin listesi: alan, nitelik, yeni parseller, işlem. Çift tık: parsel hareket listesi."""
     BASLIK = [("Onay", 90), ("Mahalle", 130), ("Sorgulanan parsel", 120), ("Alan (m²)", 90), ("Nitelik", 120),
               ("Yeni (aktif) parseller", 220), ("İşlem", 170), ("İş no", 60), ("İş durumu", 130), ("Son kontrol", 120)]
 
@@ -513,7 +513,7 @@ class PasifListe(QtWidgets.QDialog):
         self.say = QtWidgets.QLabel("")
         h.addWidget(self.say)
         v.addLayout(h)
-        ac = QtWidgets.QLabel("Parsel Sorgu'da pasif çıkan parseller. Satıra çift tıklayınca parselin hareket özeti açılır. "
+        ac = QtWidgets.QLabel("Parsel Sorgu'da pasif çıkan parseller. Satıra çift tıklayınca parselin hareket listesi (özet, tablo, grafik) açılır. "
                               "İş 'Tescillendi' yapılınca onay uyarısı kendiliğinden kalkar; kayıt burada ve Fen Klasörü'nde durur.")
         ac.setWordWrap(True)
         v.addWidget(ac)
@@ -545,7 +545,8 @@ class PasifListe(QtWidgets.QDialog):
                     eski.append(x)
             self.kayitlar[wid] = {"mahalle": mh or "", "tur": p["islem_turu"], "tarih": p["islem_tarihi"], "aciklama": p["aciklama"],
                                   "alan": p["alan"], "nitelik": p["nitelik"], "eski": eski, "yeni": ek.parselleri_coz(yeni_metin),
-                                  "parsel_no": p["parsel_no"]}
+                                  "parsel_no": p["parsel_no"], "zincir": p["zincir"], "durum": "Pasif", "kaynak": "TKGM",
+                                  "work_id": wid}
             vals = ["⚠ Bekliyor" if p["onay"] else "Onaylandı", mh or "(iş silinmiş)", ek.no_etiket(p["parsel_no"]), p["alan"] or "–",
                     p["nitelik"] or "–", yeni_metin.replace("; ", ", ") or "–",
                     f"{p['islem_turu']} {p['islem_tarihi']}".strip() or "–", f"#{wid}", jonay or "–",
@@ -579,24 +580,7 @@ class PasifListe(QtWidgets.QDialog):
         sec = self.secili()
         if not sec or sec[0] not in self.kayitlar:
             return
-        k = self.kayitlar[sec[0]]
-
-        def et(liste):
-            return ", ".join(ek.parsel_etiket(a, p) for a, p in liste) or "–"
-        metin = [f"Mahalle: {k['mahalle'] or '–'}", f"Sorgulanan parsel: {ek.no_etiket(k['parsel_no']) or '–'}",
-                 f"Alan / nitelik: {k['alan'] or '–'} m² · {k['nitelik'] or '–'}",
-                 f"İşlem: {(k['tur'] or '') + ' ' + (k['tarih'] or '')}".rstrip(),
-                 f"Eski parseller: {et(k['eski'])}", f"Yeni (aktif) parseller: {et(k['yeni'])}",
-                 f"TKGM açıklaması: {k['aciklama'] or '–'}", "",
-                 "(Hareket zincirinin grafiği Grafikler/Fen Klasörü aşamasında PySide6'ya taşınacak; eski programda görülebilir.)"]
-        d = QtWidgets.QDialog(self)
-        d.setWindowTitle("Parsel hareket özeti")
-        v = QtWidgets.QVBoxLayout(d)
-        t = QtWidgets.QPlainTextEdit("\n".join(metin))
-        t.setReadOnly(True)
-        t.setMinimumSize(560, 300)
-        v.addWidget(t)
-        d.exec()
+        self.app.zincir_detay(self.kayitlar[sec[0]])  # Özet / Tablo / Grafik
 
 
 # ---------------------------------------------------------------- Rapor ayarları
