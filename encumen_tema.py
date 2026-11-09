@@ -96,6 +96,32 @@ def hap_renkleri(zemin_hex, koyu):
     return zemin_hex, "#%02X%02X%02X" % yazi
 
 
+def tamamlayici_popup_qss(t):
+    """Ana ekrandaki QCompleter arama listelerini sağ tık menüsüyle aynı biçimde gösterir."""
+    return f"""
+QListView {{
+    background:{t['BASLIK']}; color:{t['METIN']};
+    border:1px solid {t['KENAR']}; border-radius:9px;
+    padding:5px; outline:0;
+    font-family:'Segoe UI'; font-size:9pt;
+}}
+QListView::item {{
+    background:{t['KART']}; color:{t['METIN']};
+    padding:6px 11px; margin:2px 3px;
+    min-height:17px; border:1px solid {t['KENAR']};
+    border-radius:6px;
+}}
+QListView::item:hover {{
+    background:{t['VURGU']}; color:#FFFFFF;
+    border:1px solid {t['VURGU']}; font-weight:600;
+}}
+QListView::item:selected {{
+    background:{t['VURGU']}; color:#FFFFFF;
+    border:1px solid {t['VURGU']}; font-weight:600;
+}}
+"""
+
+
 def qss_yap(t):
     """Tüm uygulama için ortak görünüm (buton, giriş, liste, menü, sekme, kaydırma, kart, tablo, diyalog)."""
     return f"""
