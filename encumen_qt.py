@@ -210,6 +210,7 @@ class ListeEditor(QtWidgets.QLineEdit):
         c.setFilterMode(Qt.MatchFlag.MatchContains)
         c.setCompletionMode(QtWidgets.QCompleter.CompletionMode.PopupCompletion)
         c.setMaxVisibleItems(15)
+        c.popup().setStyleSheet(et.tamamlayici_popup_qss(tema()))
         self.setCompleter(c)
         c.activated.connect(lambda *_: QtCore.QTimer.singleShot(0, bitir))
         ok = self.addAction(self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_ArrowDown),
@@ -359,6 +360,7 @@ class AramaliCombo(QtWidgets.QComboBox):
         c = self.completer()
         c.setFilterMode(Qt.MatchFlag.MatchContains)
         c.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        c.popup().setStyleSheet(et.tamamlayici_popup_qss(tema()))
         self.setMinimumWidth(genislik * 9)
         self._degis = degis
         self._zaman = QtCore.QTimer(self)
