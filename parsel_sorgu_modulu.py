@@ -836,7 +836,7 @@ PALET_ACIK = {
     "pasif_satir_fg": "#999999",
 }
 PALET_KOYU = {
-    "satir": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"), "Hata": ("#4d2323", "#f9dcdc")},
+    "satir": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"), "Hata": ("#4d2323", "#f9dcdc"), "Bekliyor": ("#263B59", "#DCE9FF")},
     "mesaj": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"),
               "Hata": ("#4d2323", "#f9dcdc"), "Bekliyor": ("#2b3342", "#e5e7eb")},
     "baslik": "#e5e7eb", "alt": "#9ca3af", "ust_bant": "#172B63",
