@@ -189,9 +189,10 @@ QComboBox QAbstractItemView::item:selected, QCompleter QAbstractItemView::item:s
 }}
 QTableView QLineEdit {{ border-radius:0px; padding:0px 4px; border:1px solid {t['VURGU']}; }}
 QComboBox QLineEdit {{ border:none; background:transparent; padding:0px; }}
-QComboBox::drop-down {{ subcontrol-origin:padding; subcontrol-position:right center; border:none; width:25px; }}
-QComboBox::down-arrow {{ image:none; width:0px; height:0px; border-left:4px solid transparent; border-right:4px solid transparent;
-    border-top:5px solid {t['SOLUK']}; margin-right:7px; }}
+/* Ok işaretini elle çizmek yerine Qt'nin yerel oku kullanılır.
+   Önceki CSS üçgeni bazı Windows ölçeklendirmelerinde kısa çizgi gibi görünüyordu. */
+QComboBox::drop-down {{ subcontrol-origin:padding; subcontrol-position:right center; border:none; width:28px; }}
+QComboBox::down-arrow {{ }}
 QSpinBox::up-button, QSpinBox::down-button {{ width:20px; border:none; background:transparent; subcontrol-origin:border; }}
 QSpinBox::up-button {{ subcontrol-position:top right; }}
 QSpinBox::down-button {{ subcontrol-position:bottom right; }}
