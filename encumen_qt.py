@@ -20,11 +20,11 @@ Aynı veritabanı dosyası (imar_kayitlari.db) kullanılır; tablo yapısı değ
 """
 import sys
 
-# Köprü modu: TKGM penceresi bu dosyanın kendisi başka bir süreçte çağrılarak açılır (EXE'de de çalışsın diye).
+# Köprü modu: TKGM penceresi (PySide6) bu dosyanın kendisi başka bir süreçte çağrılarak açılır (EXE'de de çalışsın diye).
+# parsel_baslat.calistir Qt olay döngüsünü çalıştırır ve çıkış kodunu döndürür.
 if __name__ == "__main__" and "--parsel-baslat" in sys.argv:
     import parsel_baslat
-    parsel_baslat.calistir(sys.argv[sys.argv.index("--parsel-baslat") + 1:])
-    sys.exit(0)
+    sys.exit(parsel_baslat.calistir(sys.argv[sys.argv.index("--parsel-baslat") + 1:]) or 0)
 
 import os
 import re
@@ -53,6 +53,30 @@ KOLON_AD = {"sira": "Sıra", "karar_ok": "Karar Dosyası", "makbuz_ok": "Makbuz 
 VARSAYILAN_GENISLIK = {"sira": 50, "karar_ok": 100, "makbuz_ok": 100, "bekleme": 95, "parsel_durum": 190,
                        "parsel_yeni": 150, "aciklama": 170}
 KOLON_NO = {k: i for i, k in enumerate(ek.TV_COLS)}
+
+
+PARSEL_YEDEK_DESEN = re.compile(r"^parsel_kayitlari_\d{4}-\d{2}-\d{2}\.db$")
+
+
+def yedekle_hepsi(ek_ad=""):
+    """İki veritabanını birlikte yedekler: imar_kayitlari.db (eski ek.yedekle ile, aynen) ve parsel_kayitlari.db (TKGM).
+    Döndürür: (imar_yedek_yolu, parsel_yedek_yolu | '', parsel_hata_metni). imar yedeği başarısızsa hata fırlatır;
+    parsel yedeği başarısız olursa işlem durmaz, hata metni döner. Yedekler aynı klasöre yazılır; parsel yedeği de
+    ek.YEDEK_SAKLA kadar saklanır."""
+    yol = ek.yedekle(ek_ad)
+    kaynak = os.path.join(ek.BASE, "parsel_kayitlari.db")
+    if not os.path.exists(kaynak):
+        return yol, "", ""
+    try:
+        kl = ek.yedek_klasor()
+        ad = f"parsel_kayitlari_{datetime.date.today():%Y-%m-%d}.db" if not ek_ad else f"parsel_kayitlari_{ek_ad}.db"
+        hedef = os.path.join(kl, ad)
+        ek.db_kopyala(kaynak, hedef)
+        for f in sorted(f for f in os.listdir(kl) if PARSEL_YEDEK_DESEN.match(f))[:-ek.YEDEK_SAKLA]:
+            os.remove(os.path.join(kl, f))
+        return yol, hedef, ""
+    except Exception as ex:
+        return yol, "", str(ex)
 
 
 def ayar_yaz(ad, deger):
@@ -619,8 +643,8 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.nb.addTab(self.fen, "Fen Klasörü")
         self.nb.currentChanged.connect(self._sekme_degisti)
 
-        sek = QtWidgets.QVBoxLayout(kap)
-        sek.setContentsMargins(6, 8, 6, 4)
+        ana_duzen = QtWidgets.QVBoxLayout(kap)
+        ana_duzen.setContentsMargins(6, 8, 6, 4)
 
         # --- özet kartları
         kr = QtWidgets.QHBoxLayout()
@@ -630,7 +654,7 @@ class AnaPencere(QtWidgets.QMainWindow):
             kt = Kart(baslik, lambda a=anahtar: self.kart_tikla(a))
             kr.addWidget(kt, 1)
             self.kartlar[anahtar] = kt
-        sek.addLayout(kr)
+        ana_duzen.addLayout(kr)
 
         # --- arama + düğmeler + menüler
         ust = QtWidgets.QHBoxLayout()
@@ -687,7 +711,7 @@ class AnaPencere(QtWidgets.QMainWindow):
             self.sutun_eylem[k] = self._eylem(sm, ek.SUTUN_AD.get(k) or ek.LAB.get(k, k), self.sutun_uygula, kutulu=True)
         ust.addWidget(self._menu_dugme("Ekran", em))
         ust.addStretch(1)
-        sek.addLayout(ust)
+        ana_duzen.addLayout(ust)
 
         # --- görünüm + liste filtreleri
         f2 = QtWidgets.QHBoxLayout()
@@ -706,7 +730,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.parsel_f.toggled.connect(lambda _: self.degis())
         f2.addWidget(self.parsel_f)
         f2.addStretch(1)
-        sek.addLayout(f2)
+        ana_duzen.addLayout(f2)
 
         # --- tarih aralığı + gecikme + kayıtlı filtreler
         self.ta = TarihAraligi(self.degis)
@@ -730,7 +754,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.ta.duzen.addWidget(self._menu_dugme("Kayıtlı filtreler", self.gm))
         self.ta.duzen.addWidget(self._dugme("Parsel Sorgu", self.parsel_sorgu_ac))
         self.ta.duzen.addWidget(self._dugme("Pasif Parseller", self.pasif_liste_ac))
-        sek.addWidget(self.ta)
+        ana_duzen.addWidget(self.ta)
 
         # --- tablo + detay paneli
         self.model = KayitModel(self)
@@ -788,11 +812,11 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.bolme.setChildrenCollapsible(False)
         self.detay.setVisible(False)
         self.detay_acik = False
-        sek.addWidget(self.bolme, 1)
+        ana_duzen.addWidget(self.bolme, 1)
 
         # --- durum satırı + renk açıklaması
         self.durum_etiket = QtWidgets.QLabel()
-        sek.addWidget(self.durum_etiket)
+        ana_duzen.addWidget(self.durum_etiket)
         lg = QtWidgets.QHBoxLayout()
         lg.addWidget(QtWidgets.QLabel("Renkler:"))
         self.lejant = {}
@@ -803,7 +827,7 @@ class AnaPencere(QtWidgets.QMainWindow):
             lg.addWidget(e)
         lg.addWidget(QtWidgets.QLabel("      Dosya:  ✓ var   ✗ yok   ? klasöre ulaşılamıyor"))
         lg.addStretch(1)
-        sek.addLayout(lg)
+        ana_duzen.addLayout(lg)
 
         self.tablo_yazi_uygula()
 
@@ -1004,7 +1028,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         except Exception:
             pass
         try:
-            ek.yedekle()
+            yedekle_hepsi()
         except Exception:
             pass
         e.accept()
@@ -1706,15 +1730,25 @@ class AnaPencere(QtWidgets.QMainWindow):
     def acilis_yedek(self):
         kl = ek.yedek_klasor()
         bugun = os.path.join(kl, f"imar_kayitlari_{datetime.date.today():%Y-%m-%d}.db")
-        if not os.path.exists(bugun):
+        bugun_parsel = os.path.join(kl, f"parsel_kayitlari_{datetime.date.today():%Y-%m-%d}.db")
+        parsel_var = os.path.exists(os.path.join(ek.BASE, "parsel_kayitlari.db"))
+        if not os.path.exists(bugun) or (parsel_var and not os.path.exists(bugun_parsel)):
             try:
-                ek.yedekle()
+                _, _, phata = yedekle_hepsi()
+                if phata:
+                    self.uyari("Parsel yedeği alınamadı", f"parsel_kayitlari.db yedeği alınamadı:\n{phata}")
             except Exception as ex:
                 self.uyari("Yedek alınamadı", f"Otomatik yedek alınamadı:\n{ex}\n\nYedek klasörünü Yedek menüsünden değiştirebilirsiniz.")
 
     def yedek_simdi(self):
         try:
-            self.bilgi("Yedek", "Yedek alındı:\n" + ek.yedekle())
+            yol, pyol, phata = yedekle_hepsi()
+            msg = "Yedek alındı:\n" + yol
+            if pyol:
+                msg += "\n" + pyol
+            if phata:
+                msg += f"\n\nUyarı: parsel_kayitlari.db yedeği alınamadı:\n{phata}"
+            self.bilgi("Yedek", msg)
         except Exception as ex:
             self.hata("Hata", f"Yedek alınamadı:\n{ex}")
 
@@ -1743,7 +1777,7 @@ class AnaPencere(QtWidgets.QMainWindow):
                         "(Mevcut hâliniz önce ayrı bir dosya olarak saklanır.) Devam edilsin mi?"):
             return
         try:
-            ek.yedekle("geri_yukleme_oncesi_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+            yedekle_hepsi("geri_yukleme_oncesi_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
             ek.db_kopyala(p, ek.DB)
             ek.init_db()
             pen.silinen_hazirla()
@@ -1756,7 +1790,7 @@ class AnaPencere(QtWidgets.QMainWindow):
     # ------------------------------------------------ TKGM (Parsel Sorgu) köprüsü
     def parsel_sorgu_ac(self):
         """İş Takip'teki AÇIK işleri parsel sorgu penceresine aktarır; sonuçlar 'parsel_kontrol' tablosuna yazılır.
-        Parsel Sorgu penceresi (hâlâ Tkinter) ayrı bir süreçte açılır (parsel_baslat.py)."""
+        Parsel Sorgu penceresi (PySide6) ayrı bir süreçte açılır (parsel_baslat.py)."""
         for modul in ("parsel_sorgu_modulu", "requests", "openpyxl"):
             if importlib.util.find_spec(modul) is None:
                 self.hata("Parsel Sorgu", "Parsel Sorgu modülü yüklenemedi.\n\nparsel_sorgu_modulu.py bu programla aynı klasörde "
