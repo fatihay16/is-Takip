@@ -84,12 +84,15 @@ def _rgb(hexkod):
 
 
 def hap_renkleri(zemin_hex, koyu):
-    """Durum hapı için (zemin, yazı) çifti. Zemin: mevcut durum rengi; yazı: aynı rengin koyulaştırılmış/açılmış tonu."""
-    r, g, b = _rgb(zemin_hex)
-    if koyu:
-        yazi = tuple(int(c + (255 - c) * 0.78) for c in (r, g, b))
-    else:
-        yazi = tuple(int(c * 0.36) for c in (r, g, b))
+    """Durum hapında yazıyı zeminle aynı renk ailesinde, okunaklı koyu/açık tonda üretir."""
+    import colorsys
+    r, g, b = (v / 255.0 for v in _rgb(zemin_hex))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    # Rengi griye çevirmeden yalnızca açıklığı değiştir; tüm durumlar kendi renk ailesini korur.
+    s = min(1.0, s * 1.12)
+    l = 0.80 if koyu else 0.30
+    rr, gg, bb = colorsys.hls_to_rgb(h, l, s)
+    yazi = tuple(round(v * 255) for v in (rr, gg, bb))
     return zemin_hex, "#%02X%02X%02X" % yazi
 
 
@@ -139,9 +142,8 @@ QComboBox QAbstractItemView, QCompleter QAbstractItemView {{ background:{t['KART
     selection-background-color:{t['SEC']}; selection-color:{t['METIN']}; padding:2px; }}
 QTableView QLineEdit {{ border-radius:0px; padding:0px 4px; border:1px solid {t['VURGU']}; }}
 QComboBox QLineEdit {{ border:none; background:transparent; padding:0px; }}
-QComboBox::drop-down {{ border:none; width:24px; }}
-QComboBox::down-arrow {{ image:none; width:0px; height:0px; border-left:5px solid transparent; border-right:5px solid transparent;
-    border-top:6px solid {t['SOLUK']}; margin-right:8px; }}
+QComboBox::drop-down {{ subcontrol-origin:padding; subcontrol-position:right center; border:none; width:28px; }}
+/* down-arrow özel üçgeni kaldırıldı: Qt'nin standart oku kullanılır. */
 QSpinBox::up-button, QSpinBox::down-button {{ width:20px; border:none; background:transparent; subcontrol-origin:border; }}
 QSpinBox::up-button {{ subcontrol-position:top right; }}
 QSpinBox::down-button {{ subcontrol-position:bottom right; }}
