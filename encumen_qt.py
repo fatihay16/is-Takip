@@ -13,8 +13,9 @@ Aynı veritabanı dosyası (imar_kayitlari.db) kullanılır; tablo yapısı değ
                            kayıt tablosu (renkler, sıralama, çoklu seçim, hücre düzenleme), detay paneli,
                            tema, yazı boyutu, sütun gizleme, silme/geri alma, dosya açma, yedek, rapor, CSV,
                            TKGM (Parsel Sorgu) açma.
-Sonraki aşamalar        : Form, Toplu Güncelle, Listeler, Silinenler, Rapor ayarları, Pasif Parseller,
-                           Takvim penceresi, Grafikler sekmesi, Fen Klasörü sekmesi.
+2. aşamada eklenenler   : Yeni kayıt / Formda düzenle / Satırı çoğalt, Toplu Güncelle, Listeler, Son silinenler,
+                           Pasif Parseller, Rapor ayarları (encumen_qt_pencereler.py).
+Sonraki aşamalar        : Takvim penceresi, Grafikler sekmesi, Fen Klasörü sekmesi, parsel hareket zinciri grafiği.
 """
 import sys
 
@@ -39,6 +40,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
 import encumen_kayit as ek  # iş mantığı (Tkinter penceresi AÇILMAZ; yalnızca fonksiyonlar kullanılır)
+import encumen_qt_pencereler as pen  # 2. aşama pencereleri: Form, TopluGuncelle, Listeler, Silinenler, PasifListe, RaporAyar
 
 YAKINDA = "Bu pencere bir sonraki aşamada PySide6'ya taşınacak. Şimdilik eski programda (encumen_kayit.py) kullanılabilir."
 
@@ -614,9 +616,9 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.ara.setMinimumWidth(190)
         self.ara.textChanged.connect(lambda _: self.load_gecikmeli())
         ust.addWidget(self.ara)
-        ust.addWidget(self._dugme("Yeni", None, "vurgu", aktif=False))
-        ust.addWidget(self._dugme("Formda Düzenle", None, aktif=False))
-        ust.addWidget(self._dugme("Toplu Güncelle", None, aktif=False))
+        ust.addWidget(self._dugme("Yeni", self.yeni, "vurgu"))
+        ust.addWidget(self._dugme("Formda Düzenle", self.duzenle))
+        ust.addWidget(self._dugme("Toplu Güncelle", self.toplu))
         ust.addWidget(self._dugme("Sil", self.sil, "tehlike"))
         ust.addWidget(self._dugme("Kararı Aç", lambda: self.ac("karar")))
         ust.addWidget(self._dugme("Makbuzu Aç", lambda: self.ac("makbuz")))
@@ -631,13 +633,13 @@ class AnaPencere(QtWidgets.QMainWindow):
         self._eylem(vm, "Son işlemi geri al (Ctrl+Z)", self.geri_al)
         vm.addSeparator()
         self._eylem(vm, "Parsel Sorgu (TKGM)...", self.parsel_sorgu_ac)
-        self._eylem(vm, "Pasif Parseller (liste)...", None, aktif=False)
-        self._eylem(vm, "Listeler (mahalle, müellif, işlem, durum)...", None, aktif=False)
+        self._eylem(vm, "Pasif Parseller (liste)...", self.pasif_liste_ac)
+        self._eylem(vm, "Listeler (mahalle, müellif, işlem, durum)...", self.listeler_ac)
         self._eylem(vm, "CSV Al (Google E-Tablo'dan)...", self.csv_al)
         self._eylem(vm, "CSV Aktar (tüm kayıtlar)...", self.csv_aktar)
         self._eylem(vm, "Dosya klasörleri (isteğe bağlı)...", self.klasorler)
         vm.addSeparator()
-        self._eylem(vm, "Son silinenler (geri getir)...", None, aktif=False)
+        self._eylem(vm, "Son silinenler (geri getir)...", self.silinenler_ac)
         ust.addWidget(self._menu_dugme("Veri", vm))
 
         rm = QtWidgets.QMenu(self)
@@ -645,7 +647,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self._eylem(rm, "Müellife göre harç dökümü (yazdır / PDF)", self.rapor_muellif)
         self._eylem(rm, "Görünen listeyi Excel'e aktar (CSV)", self.excel_aktar)
         rm.addSeparator()
-        self._eylem(rm, "Rapor başlığı ve imza ayarları...", None, aktif=False)
+        self._eylem(rm, "Rapor başlığı ve imza ayarları...", self.rapor_ayar_ac)
         ust.addWidget(self._menu_dugme("Rapor", rm))
 
         em = QtWidgets.QMenu(self)
@@ -704,7 +706,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.gm.aboutToShow.connect(self.gm_doldur)
         self.ta.duzen.addWidget(self._menu_dugme("Kayıtlı filtreler", self.gm))
         self.ta.duzen.addWidget(self._dugme("Parsel Sorgu", self.parsel_sorgu_ac))
-        self.ta.duzen.addWidget(self._dugme("Pasif Parseller", None, aktif=False))
+        self.ta.duzen.addWidget(self._dugme("Pasif Parseller", self.pasif_liste_ac))
         sek.addWidget(self.ta)
 
         # --- tablo + detay paneli
@@ -739,9 +741,9 @@ class AnaPencere(QtWidgets.QMainWindow):
 
         self.menu = QtWidgets.QMenu(self)
         self._eylem(self.menu, "Bu hücreyi düzenle (F2)", self.f2)
-        self._eylem(self.menu, "Satırı formda düzenle", None, aktif=False)
-        self._eylem(self.menu, "Seçili satırları toplu güncelle...", None, aktif=False)
-        self._eylem(self.menu, "Satırı çoğalt (aynı parsele yeni işlem)", None, aktif=False)
+        self._eylem(self.menu, "Satırı formda düzenle", self.duzenle)
+        self._eylem(self.menu, "Seçili satırları toplu güncelle...", self.toplu)
+        self._eylem(self.menu, "Satırı çoğalt (aynı parsele yeni işlem)", self.cogalt)
         self._eylem(self.menu, "Hücreyi / seçili satırları kopyala (Ctrl+C)", self.kopyala)
         self._eylem(self.menu, "Parsel sonucunu onayla (uyarıyı kaldır)", self.parsel_onayla)
         self._eylem(self.menu, "Kararı aç", lambda: self.ac("karar"))
@@ -790,6 +792,7 @@ class AnaPencere(QtWidgets.QMainWindow):
             return s
         ks("Ctrl+F", lambda: (self.nb.setCurrentIndex(0), self.ara.setFocus(), self.ara.selectAll()))
         ks("Ctrl+Z", self.geri_al)
+        ks("Ctrl+N", self.yeni)
         ks("F5", lambda: (ek.dosya_cache_temizle(), self.load()))
         ks("F3", lambda: self.detay_eylem.setChecked(not self.detay_eylem.isChecked()))
         for t in ("Ctrl++", "Ctrl+="):
@@ -1230,6 +1233,9 @@ class AnaPencere(QtWidgets.QMainWindow):
     def undo_onceki(self, ad, ids):
         self.undo_push(ad, ek.kayit_snapshot(ids))
 
+    def undo_ekle(self, ad, yeni_ids):
+        self.undo_push(ad, {i: None for i in yeni_ids})
+
     def undo_temizle(self):
         self.undo.clear()
 
@@ -1345,6 +1351,61 @@ class AnaPencere(QtWidgets.QMainWindow):
         else:
             self.kart_guncelle(self.tum_kayitlar())
             self.detay_guncelle()
+
+    # ------------------------------------------------ 2. aşama pencereleri
+    def liste_combo(self, tur):
+        """Formlardaki aramalı seçim kutusu (yazdıkça daralır). Değerler 'liste' tablosundan gelir."""
+        cb = AramaliCombo(lambda: None)
+        cb.addItems(ek.liste(tur))
+        return cb
+
+    def takvim_sec(self, ust, metin=""):
+        """None: iptal, '': temizle, 'gg.aa.yyyy': seçilen tarih."""
+        dlg = TakvimDialog(ust, metin)
+        dlg.exec()
+        return dlg.sonuc
+
+    def sec_idler(self, idler):
+        self.tablo.clearSelection()
+        for i in idler:
+            r = self.model.satir_bul(i)
+            if r >= 0:
+                self.tablo.selectionModel().select(
+                    self.model.index(r, 0), QtCore.QItemSelectionModel.SelectionFlag.Select | QtCore.QItemSelectionModel.SelectionFlag.Rows)
+
+    def yeni(self):
+        self.edit_kapat()
+        pen.Form(self).exec()
+
+    def duzenle(self):
+        i = self.sec()
+        if i:
+            pen.Form(self, i).exec()
+
+    def cogalt(self):
+        """Seçili satırdan yeni kayıt: yalnızca mahalle, ada/parsel ve müellif taşınır; diğer alanlar boş gelir."""
+        i = self.sec()
+        if i:
+            pen.Form(self, kopya=i).exec()
+
+    def toplu(self):
+        ids = self.sel_ids()
+        if not ids:
+            self.bilgi("Uyarı", "Önce satırları seçin (Ctrl veya Shift tuşuyla birden çok satır seçebilirsiniz).")
+            return
+        pen.TopluGuncelle(self, ids).exec()
+
+    def listeler_ac(self):
+        pen.Listeler(self).exec()
+
+    def silinenler_ac(self):
+        pen.Silinenler(self).exec()
+
+    def pasif_liste_ac(self):
+        pen.PasifListe(self).exec()
+
+    def rapor_ayar_ac(self):
+        pen.RaporAyar(self).exec()
 
     def kopyala(self):
         sec = self.secili_satirlar()
