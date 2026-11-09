@@ -139,24 +139,23 @@ QLineEdit, QSpinBox, QDateEdit, QComboBox, QTextEdit, QPlainTextEdit {{
 QLineEdit:focus, QSpinBox:focus, QDateEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border:1px solid {t['VURGU']}; }}
 QLineEdit:disabled, QComboBox:disabled {{ background:{t['BASLIK']}; color:{t['SOLUK']}; }}
 QComboBox {{ padding:4px 9px; min-height:22px; }}
-/* Açılır listeler: tüm QComboBox, arama önerileri ve diyalog listelerinde ortak stil */
-QAbstractItemView, QComboBox QAbstractItemView, QCompleter QAbstractItemView {{
+/* Açılır liste popup'ları: tablo hücreleri ve sütun başlıklarının stiline karışmaz */
+QComboBox QAbstractItemView, QCompleter QAbstractItemView {{
     background:{t['BASLIK']}; color:{t['METIN']};
     border:1px solid {t['KENAR']}; border-radius:8px;
     outline:0; padding:5px;
-    alternate-background-color:{t['KART']};
     selection-background-color:{t['VURGU']}; selection-color:#FFFFFF;
 }}
-QAbstractItemView::item, QComboBox QAbstractItemView::item, QCompleter QAbstractItemView::item {{
+QComboBox QAbstractItemView::item, QCompleter QAbstractItemView::item {{
     min-height:24px; padding:6px 10px; margin:1px 2px;
     border:1px solid transparent; border-radius:5px;
     color:{t['METIN']}; background:{t['KART']};
 }}
-QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:hover, QCompleter QAbstractItemView::item:hover {{
+QComboBox QAbstractItemView::item:hover, QCompleter QAbstractItemView::item:hover {{
     background:{t['BHOV']}; color:{t['VURGU_K']};
     border:1px solid {t['KENAR']};
 }}
-QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:selected, QCompleter QAbstractItemView::item:selected {{
+QComboBox QAbstractItemView::item:selected, QCompleter QAbstractItemView::item:selected {{
     background:{t['VURGU']}; color:#FFFFFF; font-weight:600;
     border:1px solid {t['VURGU']};
 }}
