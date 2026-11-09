@@ -143,7 +143,8 @@ QComboBox QAbstractItemView, QCompleter QAbstractItemView {{ background:{t['KART
 QTableView QLineEdit {{ border-radius:0px; padding:0px 4px; border:1px solid {t['VURGU']}; }}
 QComboBox QLineEdit {{ border:none; background:transparent; padding:0px; }}
 QComboBox::drop-down {{ subcontrol-origin:padding; subcontrol-position:right center; border:none; width:28px; }}
-/* down-arrow özel üçgeni kaldırıldı: Qt'nin standart oku kullanılır. */
+QComboBox::down-arrow {{ image:none; width:0px; height:0px; border-left:5px solid transparent; border-right:5px solid transparent;
+    border-top:6px solid {t['SOLUK']}; margin-right:8px; }}
 QSpinBox::up-button, QSpinBox::down-button {{ width:20px; border:none; background:transparent; subcontrol-origin:border; }}
 QSpinBox::up-button {{ subcontrol-position:top right; }}
 QSpinBox::down-button {{ subcontrol-position:bottom right; }}
