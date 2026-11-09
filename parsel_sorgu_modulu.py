@@ -17,7 +17,11 @@ from PySide6.QtGui import QColor, QBrush, QPainter, QPen, QFont, QPolygonF, QGui
 from PySide6.QtWidgets import (QApplication, QMainWindow, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                                QPushButton, QCheckBox, QComboBox, QLineEdit, QGroupBox, QTableView, QTableWidget,
                                QTableWidgetItem, QHeaderView, QProgressBar, QSpinBox, QTabWidget, QPlainTextEdit,
-                               QScrollArea, QMessageBox, QFileDialog, QAbstractItemView, QCompleter, QSizePolicy)
+                               QScrollArea, QMessageBox, QFileDialog, QAbstractItemView, QCompleter, QSizePolicy, QFrame)
+try:
+    import encumen_tema as _et  # ortak kurumsal görünüm (yoksa eski görünüm kullanılır)
+except Exception:
+    _et = None
 
 import requests
 from openpyxl import Workbook, load_workbook
@@ -826,7 +830,7 @@ PALET_ACIK = {
     "satir": {"Aktif": ("#e3f4e8", "#14301f"), "Pasif": ("#fde9c9", "#4a2f05"), "Belirsiz": ("#fff6cc", "#4a4010"), "Hata": ("#fde2e2", "#4a1414")},
     "mesaj": {"Aktif": ("#dff0d8", "#1f4d2b"), "Pasif": ("#fcf8e3", "#6b5a2a"), "Belirsiz": ("#fff6cc", "#4a4010"),
               "Hata": ("#f2dede", "#5a1f1f"), "Bekliyor": ("#eeeeee", "#333333")},
-    "baslik": "#18334d", "alt": "#586575", "ust_bant": "#337ab7",
+    "baslik": "#18334d", "alt": "#586575", "ust_bant": "#1E3A8A",
     "cv_bg": "#ffffff", "cv_yazi": "#111111", "cv_cizgi": "#777777",
     "cv_pasif": ("#d3d3d3", "#000000"), "cv_aktif": ("#7a9a3a", "#ffffff"), "cv_tahmin": ("#ececec", "#555555"),
     "pasif_satir_fg": "#999999",
@@ -835,7 +839,7 @@ PALET_KOYU = {
     "satir": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"), "Hata": ("#4d2323", "#f9dcdc")},
     "mesaj": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"),
               "Hata": ("#4d2323", "#f9dcdc"), "Bekliyor": ("#2b3342", "#e5e7eb")},
-    "baslik": "#e5e7eb", "alt": "#9ca3af", "ust_bant": "#1e3a8a",
+    "baslik": "#e5e7eb", "alt": "#9ca3af", "ust_bant": "#172B63",
     "cv_bg": "#1f2430", "cv_yazi": "#e5e7eb", "cv_cizgi": "#9ca3af",
     "cv_pasif": ("#4b5563", "#f3f4f6"), "cv_aktif": ("#4d7c0f", "#ffffff"), "cv_tahmin": ("#2f3542", "#9ca3af"),
     "pasif_satir_fg": "#9ca3af",
@@ -854,6 +858,8 @@ def qapp_hazirla():
     if app is None:
         app = QApplication(sys.argv)
         app.setStyle("Fusion")
+        if _et:
+            app.setFont(_et.font_yap(10))
     return app
 
 
@@ -908,6 +914,23 @@ def hata_kutusu(parent, baslik, metin):
 
 def sor(parent, baslik, metin):
     return _kutu(parent, QMessageBox.Icon.Question, baslik, metin, sorulu=True)
+
+
+def takip_temasi_koyu(takip_db):
+    """İş Takip'te seçili temayı salt okunur okur: True=koyu, False=açık, None=bilinmiyor."""
+    if not takip_db:
+        return None
+    try:
+        con = sqlite3.connect(f"file:{Path(takip_db).as_posix()}?mode=ro", uri=True, timeout=5)
+        try:
+            for r in con.execute("SELECT * FROM ayar"):
+                if r and r[0] == "tema":
+                    return str(r[1]) == "koyu"
+        finally:
+            con.close()
+    except Exception:
+        pass
+    return None
 
 
 class _Is(QThread):
@@ -1004,7 +1027,7 @@ class ParselModel(QAbstractTableModel):
 
     def headerData(self, bolum, yon, rol=Qt.ItemDataRole.DisplayRole):
         if rol == Qt.ItemDataRole.DisplayRole and yon == Qt.Orientation.Horizontal:
-            return self.BASLIK[bolum]
+            return _et.tr_buyuk(self.BASLIK[bolum]) if _et else self.BASLIK[bolum]
         return None
 
     def data(self, index, rol=Qt.ItemDataRole.DisplayRole):
@@ -1015,6 +1038,8 @@ class ParselModel(QAbstractTableModel):
             return str(deger[index.column()])
         if rol == Qt.ItemDataRole.UserRole:
             return i
+        if rol == Qt.ItemDataRole.FontRole and _et and index.column() in (3, 4, 7, 11):   # ada, parsel, alan, son kontrol
+            return _et.font_yap(10, mono=True)
         renk = self.pal["satir"].get(durum)
         if renk and rol == Qt.ItemDataRole.BackgroundRole:
             return QBrush(QColor(renk[0]))
@@ -1041,6 +1066,8 @@ def _tablo_yap(basliklar, genislikler, satirlar, soluk=None):
     t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     t.verticalHeader().setVisible(False)
     t.horizontalHeader().setStretchLastSection(True)
+    if _et:
+        t.horizontalHeader().setFont(_et.font_yap(8.5, kalin=True))
     for j, w in enumerate(genislikler):
         t.setColumnWidth(j, w)
     for i, (degerler, soluk_mu) in enumerate(satirlar):
@@ -1159,7 +1186,7 @@ class Detay(QDialog):
         ly.addLayout(izgara)
         if durum == "Pasif":
             n = QLabel("Not: Pasif parselin alan/niteliği son kayıtlı bilgidir.")
-            n.setStyleSheet("color:#777;")
+            n.setStyleSheet(f"color:{(getattr(master, 'tk', None) or {}).get('SOLUK', '#777')};")
             ly.addWidget(n)
         ly.addStretch(1)
 
@@ -1312,7 +1339,7 @@ class Detay(QDialog):
                       p.get("islem_turu") or "-", p.get("islem_tarihi") or "-"), p.get("durum") == "Pasif") for p in devam]
         ly = QVBoxLayout(self.devam_tab)
         ly.addWidget(_tablo_yap(["Ada", "Parsel", "Durum", "Alan (m²)", "Nitelik", "İşlem Türü", "İşlem Tarihi"],
-                                [70, 80, 80, 110, 190, 140, 100], satirlar, "#8a8a8a"))
+                                [70, 80, 80, 110, 190, 140, 100], satirlar, self.pal["pasif_satir_fg"]))
         if not devam:
             ly.addWidget(QLabel("Parsel hareket zinciri bilgisi bulunamadı."), 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -1369,7 +1396,7 @@ class HareketAyar(QDialog):
         satir.addStretch(1)
         ly.addLayout(satir)
         o = QLabel("Şablon örneği:  https://.../api/.../{mahalle_id}/{ada}/{parsel}")
-        o.setStyleSheet("color:#666;")
+        o.setStyleSheet(f"color:{(getattr(app, 'tk', None) or {}).get('SOLUK', '#666')};")
         ly.addWidget(o)
         ly.addStretch(1)
 
@@ -1451,8 +1478,13 @@ class App(QMainWindow):
         self._durdur = threading.Event()
         self.gizli_sayi = 0
         self._detaylar = []
-        self.koyu = koyu_mu(self)
+        tk_koyu = takip_temasi_koyu(self.takip_db)
+        self.koyu = koyu_mu(self) if tk_koyu is None else tk_koyu
         self.pal = PALET_KOYU if self.koyu else PALET_ACIK
+        self.tk = _et.jetonlar(self.koyu) if _et else None
+        if self.tk:  # yalnızca bu pencere (ve alt pencereleri) boyanır; uygulamanın geri kalanına dokunulmaz
+            self.setPalette(_et.palet_yap(self.tk))
+            self.setStyleSheet(_et.qss_yap(self.tk))
         self._ui()
         self._durum_sig.connect(lambda t: self.status.set(t))
         self._ilerleme_sig.connect(self.progress.setValue)
@@ -1481,20 +1513,33 @@ class App(QMainWindow):
         merkez = QWidget()
         self.setCentralWidget(merkez)
         ana = QVBoxLayout(merkez)
-        ana.setContentsMargins(18, 14, 18, 8)
-        baslik = QLabel("Toplu Parsel Sorgulama")
-        baslik.setStyleSheet(f"font:bold 18pt 'Segoe UI';color:{self.pal['baslik']};")
-        ana.addWidget(baslik)
+        ana.setContentsMargins(0, 0, 0, 0)
+        ana.setSpacing(0)
+        band = QFrame()
+        band.setObjectName("bant")
+        band.setStyleSheet(f"QFrame#bant{{background:{self.pal['ust_bant']};}}")
+        bl = QVBoxLayout(band)
+        bl.setContentsMargins(22, 12, 22, 12)
+        bl.setSpacing(2)
+        baslik = QLabel("Toplu Parsel Sorgulama | TKGM")
+        baslik.setStyleSheet("font-size:16pt;font-weight:600;color:white;background:transparent;")
         alt = QLabel("Aktif parselde alan ve nitelik, pasif parselde pasife alınma ibaresi ve oluşan yeni parseller gösterilir. "
                      "Satıra çift tıklayınca hareket listesi açılır.")
-        alt.setStyleSheet(f"color:{self.pal['alt']};")
+        alt.setStyleSheet("color:#C9D6F5;background:transparent;")
         alt.setWordWrap(True)
-        ana.addWidget(alt)
+        bl.addWidget(baslik)
+        bl.addWidget(alt)
+        ana.addWidget(band)
+        icerik = QWidget()
+        ana.addWidget(icerik, 1)
+        ana = QVBoxLayout(icerik)
+        ana.setContentsMargins(18, 14, 18, 8)
+        ana.setSpacing(10)
 
         bar = QHBoxLayout()
         bar.addWidget(self.btn("Excel şablonu oluştur", self.template))
         bar.addWidget(self.btn("Excel içe aktar", self.import_excel))
-        bar.addWidget(self.btn("İş listesinden aktar", self.is_listesinden_aktar))
+        bar.addWidget(self.vurgu(self.btn("İş listesinden aktar", self.is_listesinden_aktar)))
         bar.addWidget(self.btn("Sonuçları İş Takip'e yaz", self.tum_sonuclari_takibe_yaz))
         self.kapalilari_goster = QCheckBox("Kapanan işlerin parsellerini de göster")
         self.kapalilari_goster.toggled.connect(lambda _v: self.refresh())
@@ -1510,7 +1555,9 @@ class App(QMainWindow):
         izgara = QGridLayout(form)
         self.vars = {}
         for i, (etiket, key) in enumerate((("İl", "il"), ("İlçe", "ilce"), ("Mahalle", "mahalle"), ("Ada", "ada"), ("Parsel", "parsel"))):
-            izgara.addWidget(QLabel(etiket), 0, i)
+            _e = QLabel(etiket)
+            _e.setStyleSheet(f"color:{self.tk['SOLUK']};font-size:8.5pt;" if self.tk else "")
+            izgara.addWidget(_e, 0, i)
             if key in ("il", "ilce", "mahalle"):
                 w = AramaliKutu()
                 if key == "il":
@@ -1523,7 +1570,7 @@ class App(QMainWindow):
             self.vars[key] = w
             izgara.addWidget(w, 1, i)
             izgara.setColumnStretch(i, 1)
-        izgara.addWidget(self.btn("Listeye ekle", self.add_manual), 1, 5)
+        izgara.addWidget(self.vurgu(self.btn("Listeye ekle", self.add_manual)), 1, 5)
         izgara.addWidget(self.btn("Mahalle listesini yenile", self.mahalleleri_yenile), 1, 6)
         ana.addWidget(form)
 
@@ -1540,6 +1587,8 @@ class App(QMainWindow):
         bs.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         for j, w in enumerate(ParselModel.GENISLIK):
             self.tree.setColumnWidth(j, w)
+        if _et:
+            bs.setFont(_et.font_yap(8.5, kalin=True, aralik=0.5))
         self.tree.doubleClicked.connect(lambda _i: self.detay_ac())
         ana.addWidget(self.tree, 1)
 
@@ -1559,12 +1608,17 @@ class App(QMainWindow):
         self.limit_spin.valueChanged.connect(lambda _v: self.limit_degisti())
         alt_bar.addWidget(self.limit_spin)
         self.sayac_etiket = QLabel()
-        self.sayac_etiket.setStyleSheet("color:#18334d;font-weight:bold;" if not self.koyu else "font-weight:bold;")
+        self.sayac_etiket.setStyleSheet("color:#18334d;font-weight:bold;" if (not self.koyu and not self.tk) else "font-weight:bold;")
         alt_bar.addSpacing(14)
         alt_bar.addWidget(self.sayac_etiket)
         alt_bar.addWidget(self.btn("Seçili satırları sorgula", lambda: self.start_queries(secili=True)))
-        alt_bar.addWidget(self.btn("Bekleyenleri sorgula", self.start_queries))
+        alt_bar.addWidget(self.vurgu(self.btn("Bekleyenleri sorgula", self.start_queries)))
         ana.addLayout(alt_bar)
+
+    @staticmethod
+    def vurgu(b):
+        b.setObjectName("vurgu")
+        return b
 
     def btn(self, parent_veya_metin, metin_veya_komut, komut=None):
         """btn(metin, komut) biçiminde de çağrılabilir (eski btn(parent, metin, komut) imzası korunur)."""
