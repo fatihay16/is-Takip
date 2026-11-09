@@ -138,13 +138,28 @@ QLineEdit, QSpinBox, QDateEdit, QComboBox, QTextEdit, QPlainTextEdit {{
     selection-background-color:{t['VURGU']}; selection-color:white; }}
 QLineEdit:focus, QSpinBox:focus, QDateEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border:1px solid {t['VURGU']}; }}
 QLineEdit:disabled, QComboBox:disabled {{ background:{t['BASLIK']}; color:{t['SOLUK']}; }}
-QComboBox QAbstractItemView, QCompleter QAbstractItemView {{ background:{t['KART']}; color:{t['METIN']}; border:1px solid {t['KENAR']};
-    selection-background-color:{t['SEC']}; selection-color:{t['METIN']}; padding:2px; }}
+QComboBox {{ padding:4px 9px; min-height:22px; }}
+QComboBox QAbstractItemView, QCompleter QAbstractItemView {{
+    background:{t['KART']}; color:{t['METIN']};
+    border:1px solid {t['KENAR']}; border-radius:7px;
+    outline:0; padding:4px;
+    selection-background-color:{t['SEC']}; selection-color:{t['VURGU_K']};
+}}
+QComboBox QAbstractItemView::item, QCompleter QAbstractItemView::item {{
+    min-height:22px; padding:6px 9px; border-radius:5px;
+    color:{t['METIN']}; background:transparent;
+}}
+QComboBox QAbstractItemView::item:hover, QCompleter QAbstractItemView::item:hover {{
+    background:{t['BHOV']}; color:{t['VURGU_K']};
+}}
+QComboBox QAbstractItemView::item:selected, QCompleter QAbstractItemView::item:selected {{
+    background:{t['SEC']}; color:{t['VURGU_K']}; font-weight:600;
+}}
 QTableView QLineEdit {{ border-radius:0px; padding:0px 4px; border:1px solid {t['VURGU']}; }}
 QComboBox QLineEdit {{ border:none; background:transparent; padding:0px; }}
-QComboBox::drop-down {{ subcontrol-origin:padding; subcontrol-position:right center; border:none; width:28px; }}
-QComboBox::down-arrow {{ image:none; width:0px; height:0px; border-left:5px solid transparent; border-right:5px solid transparent;
-    border-top:6px solid {t['SOLUK']}; margin-right:8px; }}
+QComboBox::drop-down {{ subcontrol-origin:padding; subcontrol-position:right center; border:none; width:25px; }}
+QComboBox::down-arrow {{ image:none; width:0px; height:0px; border-left:4px solid transparent; border-right:4px solid transparent;
+    border-top:5px solid {t['SOLUK']}; margin-right:7px; }}
 QSpinBox::up-button, QSpinBox::down-button {{ width:20px; border:none; background:transparent; subcontrol-origin:border; }}
 QSpinBox::up-button {{ subcontrol-position:top right; }}
 QSpinBox::down-button {{ subcontrol-position:bottom right; }}
@@ -162,26 +177,26 @@ QGroupBox::title {{ subcontrol-origin:margin; left:14px; padding:0px 6px; color:
 
 /* ---- modern sag tik ve acilir menuler (acik/koyu tema jetonlariyla) */
 QMenu {{
-    background:{t['KART']}; color:{t['METIN']};
-    border:1px solid {t['KENAR']}; border-radius:11px;
-    padding:7px; font-family:'Segoe UI'; font-size:9.5pt;
+    background:{t['BASLIK']}; color:{t['METIN']};
+    border:1px solid {t['KENAR']}; border-radius:9px;
+    padding:5px; font-family:'Segoe UI'; font-size:9pt;
 }}
 QMenu::item {{
     background:transparent; color:{t['METIN']};
-    padding:9px 34px 9px 14px; margin:2px 3px;
-    min-height:20px; border:1px solid transparent; border-radius:7px;
+    padding:6px 28px 6px 11px; margin:1px 2px;
+    min-height:17px; border:1px solid transparent; border-radius:6px;
 }}
 QMenu::item:selected {{
-    background:{t['SEC']}; color:{t['METIN']};
+    background:{t['SEC']}; color:{t['VURGU_K']};
     border:1px solid {t['KENAR']}; border-left:3px solid {t['VURGU']};
-    padding-left:12px;
+    padding-left:9px; font-weight:600;
 }}
 QMenu::item:disabled {{ color:{t['SOLUK']}; background:transparent; }}
-QMenu::icon {{ margin-left:5px; }}
-QMenu::indicator {{ width:15px; height:15px; left:7px; }}
+QMenu::icon {{ margin-left:4px; }}
+QMenu::indicator {{ width:14px; height:14px; left:6px; }}
 QMenu::separator {{
     height:1px; background:{t['KENAR']};
-    margin:6px 9px; padding:0px;
+    margin:4px 7px; padding:0px;
 }}
 
 /* ---- sekmeler (hap biçimli) */
