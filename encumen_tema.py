@@ -160,12 +160,29 @@ QCheckBox:disabled {{ color:{t['SOLUK']}; }}
 QGroupBox {{ background:{t['KART']}; border:1px solid {t['KENAR']}; border-radius:10px; margin-top:14px; padding:10px; }}
 QGroupBox::title {{ subcontrol-origin:margin; left:14px; padding:0px 6px; color:{t['VURGU']}; font-weight:bold; }}
 
-/* ---- menü */
-QMenu {{ background:{t['KART']}; color:{t['METIN']}; border:1px solid {t['KENAR']}; padding:6px; }}
-QMenu::item {{ padding:6px 26px 6px 14px; border-radius:6px; }}
-QMenu::item:selected {{ background:{t['SEC']}; color:{t['METIN']}; }}
-QMenu::item:disabled {{ color:{t['SOLUK']}; }}
-QMenu::separator {{ height:1px; background:{t['KENAR']}; margin:5px 8px; }}
+/* ---- modern sag tik ve acilir menuler (acik/koyu tema jetonlariyla) */
+QMenu {{
+    background:{t['KART']}; color:{t['METIN']};
+    border:1px solid {t['KENAR']}; border-radius:11px;
+    padding:7px; font-family:'Segoe UI'; font-size:9.5pt;
+}}
+QMenu::item {{
+    background:transparent; color:{t['METIN']};
+    padding:9px 34px 9px 14px; margin:2px 3px;
+    min-height:20px; border:1px solid transparent; border-radius:7px;
+}}
+QMenu::item:selected {{
+    background:{t['SEC']}; color:{t['METIN']};
+    border:1px solid {t['KENAR']}; border-left:3px solid {t['VURGU']};
+    padding-left:12px;
+}}
+QMenu::item:disabled {{ color:{t['SOLUK']}; background:transparent; }}
+QMenu::icon {{ margin-left:5px; }}
+QMenu::indicator {{ width:15px; height:15px; left:7px; }}
+QMenu::separator {{
+    height:1px; background:{t['KENAR']};
+    margin:6px 9px; padding:0px;
+}}
 
 /* ---- sekmeler (hap biçimli) */
 QTabWidget::pane {{ border:none; top:4px; }}
