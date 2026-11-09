@@ -139,21 +139,26 @@ QLineEdit, QSpinBox, QDateEdit, QComboBox, QTextEdit, QPlainTextEdit {{
 QLineEdit:focus, QSpinBox:focus, QDateEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border:1px solid {t['VURGU']}; }}
 QLineEdit:disabled, QComboBox:disabled {{ background:{t['BASLIK']}; color:{t['SOLUK']}; }}
 QComboBox {{ padding:4px 9px; min-height:22px; }}
-QComboBox QAbstractItemView, QCompleter QAbstractItemView {{
-    background:{t['KART']}; color:{t['METIN']};
-    border:1px solid {t['KENAR']}; border-radius:7px;
-    outline:0; padding:4px;
-    selection-background-color:{t['SEC']}; selection-color:{t['VURGU_K']};
+/* Açılır listeler: tüm QComboBox, arama önerileri ve diyalog listelerinde ortak stil */
+QAbstractItemView, QComboBox QAbstractItemView, QCompleter QAbstractItemView {{
+    background:{t['BASLIK']}; color:{t['METIN']};
+    border:1px solid {t['KENAR']}; border-radius:8px;
+    outline:0; padding:5px;
+    alternate-background-color:{t['KART']};
+    selection-background-color:{t['VURGU']}; selection-color:#FFFFFF;
 }}
-QComboBox QAbstractItemView::item, QCompleter QAbstractItemView::item {{
-    min-height:22px; padding:6px 9px; border-radius:5px;
-    color:{t['METIN']}; background:transparent;
+QAbstractItemView::item, QComboBox QAbstractItemView::item, QCompleter QAbstractItemView::item {{
+    min-height:24px; padding:6px 10px; margin:1px 2px;
+    border:1px solid transparent; border-radius:5px;
+    color:{t['METIN']}; background:{t['KART']};
 }}
-QComboBox QAbstractItemView::item:hover, QCompleter QAbstractItemView::item:hover {{
+QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:hover, QCompleter QAbstractItemView::item:hover {{
     background:{t['BHOV']}; color:{t['VURGU_K']};
+    border:1px solid {t['KENAR']};
 }}
-QComboBox QAbstractItemView::item:selected, QCompleter QAbstractItemView::item:selected {{
-    background:{t['SEC']}; color:{t['VURGU_K']}; font-weight:600;
+QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:selected, QCompleter QAbstractItemView::item:selected {{
+    background:{t['VURGU']}; color:#FFFFFF; font-weight:600;
+    border:1px solid {t['VURGU']};
 }}
 QTableView QLineEdit {{ border-radius:0px; padding:0px 4px; border:1px solid {t['VURGU']}; }}
 QComboBox QLineEdit {{ border:none; background:transparent; padding:0px; }}
@@ -182,13 +187,13 @@ QMenu {{
     padding:5px; font-family:'Segoe UI'; font-size:9pt;
 }}
 QMenu::item {{
-    background:transparent; color:{t['METIN']};
-    padding:6px 28px 6px 11px; margin:1px 2px;
-    min-height:17px; border:1px solid transparent; border-radius:6px;
+    background:{t['KART']}; color:{t['METIN']};
+    padding:6px 28px 6px 11px; margin:2px 3px;
+    min-height:17px; border:1px solid {t['KENAR']}; border-radius:6px;
 }}
 QMenu::item:selected {{
-    background:{t['SEC']}; color:{t['VURGU_K']};
-    border:1px solid {t['KENAR']}; border-left:3px solid {t['VURGU']};
+    background:{t['VURGU']}; color:#FFFFFF;
+    border:1px solid {t['VURGU']}; border-left:3px solid {t['VURGU_K']};
     padding-left:9px; font-weight:600;
 }}
 QMenu::item:disabled {{ color:{t['SOLUK']}; background:transparent; }}
