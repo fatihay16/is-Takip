@@ -43,9 +43,29 @@ from PySide6.QtCore import Qt
 import encumen_kayit as ek  # iş mantığı (Tkinter penceresi AÇILMAZ; yalnızca fonksiyonlar kullanılır)
 import encumen_qt_sekmeler as sek  # 3. aşama: Takvim, Grafikler, Fen Klasörü, parsel hareket listesi
 import encumen_qt_pencereler as pen  # 2. aşama pencereleri: Form, TopluGuncelle, Listeler, Silinenler, PasifListe, RaporAyar
+import encumen_tema as et  # görünüm jetonları (renk/QSS); iş mantığı içermez
 
 YAKINDA = "Bu pencere bir sonraki aşamada PySide6'ya taşınacak. Şimdilik eski programda (encumen_kayit.py) kullanılabilir."
 
+MONO_YAZI = True    # karar no, tarih, alan (m²) sütunları eşit genişlikli fontla (Consolas); False: tüm tabloda tek font
+KALIN_SUTUN = ("mahalle", "alinan_ucret", "ada_parsel")                   # yarı kalın
+MONO_SUTUN = ("karar_no", "makbuz_no", "alan", "yuzolcum", "sira")       # + adında "tarih" geçen tüm sütunlar
+_FONT_ONBELLEK = {}
+
+
+def tablo_fontu(tur):
+    """Tablo hücre yazı tipi (önbellekli). tur: 'yari' | 'mono'. Boyut ek.TABLO_PUNTO'ya göre ölçeklenir."""
+    anahtar = (tur, ek.TABLO_PUNTO)
+    if anahtar not in _FONT_ONBELLEK:
+        _FONT_ONBELLEK[anahtar] = et.font_yap(ek.TABLO_PUNTO, yari=(tur == "yari"), mono=(tur == "mono"))
+    return _FONT_ONBELLEK[anahtar]
+
+
+def mono_sutun_mu(k):
+    return k in MONO_SUTUN or "tarih" in k
+
+
+SATIR_BOYA = False  # True: eski görünüm (tüm satır durum rengiyle boyanır). False: yalnızca "onay" sütununda renkli hap.
 SIRALANABILIR = set(ek.SHOWN) | {"bekleme", "parsel_durum", "parsel_yeni"}
 DUZENLENEMEZ = {"sira", "karar_ok", "makbuz_ok", "bekleme", "parsel_durum", "parsel_yeni"}
 ORTALI = {"sira", "karar_ok", "makbuz_ok", "bekleme"}
@@ -89,47 +109,15 @@ def kolon_baslik(k):
 
 # ---------------------------------------------------------------- tema
 def tema():
-    return ek.TEMA_KOYU if ek.KOYU else ek.TEMA_ACIK
+    return et.birlestir(ek.TEMA_KOYU if ek.KOYU else ek.TEMA_ACIK, ek.KOYU)
 
 
 def palet_yap(t):
-    p = QtGui.QPalette()
-    R = QtGui.QPalette.ColorRole
-    G = QtGui.QPalette.ColorGroup
-    for rol, anahtar in ((R.Window, "BG"), (R.WindowText, "METIN"), (R.Base, "KART"), (R.AlternateBase, "BASLIK"),
-                         (R.Text, "METIN"), (R.Button, "KART"), (R.ButtonText, "METIN"), (R.ToolTipBase, "KART"),
-                         (R.ToolTipText, "METIN"), (R.PlaceholderText, "SOLUK"), (R.BrightText, "KIRMIZI")):
-        p.setColor(rol, QtGui.QColor(t[anahtar]))
-    p.setColor(R.Highlight, QtGui.QColor(t["VURGU"]))
-    p.setColor(R.HighlightedText, QtGui.QColor("white"))
-    for rol in (R.WindowText, R.Text, R.ButtonText):
-        p.setColor(G.Disabled, rol, QtGui.QColor(t["SOLUK"]))
-    return p
+    return et.palet_yap(t)
 
 
 def qss_yap(t):
-    return f"""
-QToolTip {{ background:{t['KART']}; color:{t['METIN']}; border:1px solid {t['KENAR']}; }}
-QFrame#bant {{ background:#1e293b; }}
-QFrame#bant QLabel {{ background:transparent; color:#cbd5e1; }}
-QLabel#bantBaslik {{ color:white; font-size:15pt; font-weight:bold; padding:11px 0px 11px 18px; }}
-QLabel#bantAlt {{ color:#94a3b8; }}
-QLabel#bildirim {{ color:#fbbf24; padding:0px 18px; }}
-QLabel#temaDugme {{ color:#cbd5e1; padding:0px 14px; }}
-QFrame#kart {{ background:{t['KART']}; border:1px solid {t['KENAR']}; }}
-QFrame#kart QLabel {{ background:transparent; }}
-QLabel#kartSayi {{ font-size:20pt; font-weight:bold; }}
-QLabel#kartBaslik {{ color:{t['SOLUK']}; }}
-QPushButton#vurgu {{ background:{t['VURGU']}; color:white; border:1px solid {t['VURGU']}; border-radius:3px; padding:6px 14px; }}
-QPushButton#vurgu:hover {{ background:{t['VURGU_K']}; }}
-QPushButton#vurgu:disabled {{ background:{t['BASLIK']}; color:{t['SOLUK']}; border:1px solid {t['KENAR']}; }}
-QPushButton#tehlike {{ color:{t['KIRMIZI']}; }}
-QTableView {{ background:{t['KART']}; border:1px solid {t['KENAR']}; gridline-color:{t['KENAR']};
-              selection-background-color:{t['SEC']}; selection-color:{t['METIN']}; }}
-QHeaderView::section {{ background:{t['BASLIK']}; color:{t['METIN']}; padding:6px 7px; border:none; font-weight:bold; }}
-QHeaderView::section:hover {{ background:{t['BHOV']}; }}
-QTextEdit#detay {{ background:{t['KART']}; border:1px solid {t['KENAR']}; }}
-"""
+    return et.qss_yap(t)
 
 
 # ---------------------------------------------------------------- tablo modeli
@@ -175,11 +163,24 @@ class KayitModel(QtCore.QAbstractTableModel):
             v = d.get(k, "")
             return "" if v is None else str(v)
         if rol == Qt.ItemDataRole.BackgroundRole:
+            if not SATIR_BOYA:
+                return None
             r = ek.DURUM_UI.get(d.get("onay", ""))
             return QtGui.QBrush(QtGui.QColor(r)) if r else None
         if rol == Qt.ItemDataRole.ForegroundRole:
             if self.pencere.geciken(d) or d.get("parsel_onay"):
                 return QtGui.QBrush(QtGui.QColor(ek.KIRMIZI))
+            if not SATIR_BOYA:
+                if k == "ada_parsel":
+                    return QtGui.QBrush(QtGui.QColor(tema()["VURGU"]))
+                if k == "alinan_ucret":
+                    return QtGui.QBrush(QtGui.QColor(tema()["YESIL"]))
+            return None
+        if rol == Qt.ItemDataRole.FontRole and not SATIR_BOYA:
+            if k in KALIN_SUTUN:
+                return tablo_fontu("yari")
+            if MONO_YAZI and mono_sutun_mu(k):
+                return tablo_fontu("mono")
             return None
         if rol == Qt.ItemDataRole.TextAlignmentRole:
             return int((Qt.AlignmentFlag.AlignCenter if k in ORTALI
@@ -194,7 +195,7 @@ class KayitModel(QtCore.QAbstractTableModel):
         sr = self.pencere.siralama
         if sr and sr[0] == k:
             ok = " ▼" if sr[1] else " ▲"
-        return kolon_baslik(k) + ok
+        return et.tr_buyuk(kolon_baslik(k)) + ok
 
 
 class ListeEditor(QtWidgets.QLineEdit):
@@ -247,6 +248,35 @@ class HucreDelegate(QtWidgets.QStyledItemDelegate):
         self.aktif = ed
         ed.destroyed.connect(lambda *_: setattr(self, "aktif", None) if self.aktif is ed else None)
         return ed
+
+    def paint(self, p, option, index):
+        k = ek.TV_COLS[index.column()]
+        metin = index.data(Qt.ItemDataRole.DisplayRole)
+        if SATIR_BOYA or k != "onay" or not metin:
+            return super().paint(p, option, index)
+        opt = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        stil = opt.widget.style() if opt.widget else QtWidgets.QApplication.style()
+        stil.drawControl(QtWidgets.QStyle.ControlElement.CE_ItemViewItem, opt, p, opt.widget)
+        t = tema()
+        zemin, yazi = et.hap_renkleri(ek.DURUM_UI.get(metin) or t["GRI_ZEMIN"], ek.KOYU)
+        f = QtGui.QFont(option.font)
+        f.setBold(True)
+        f.setPointSizeF(max(7.5, f.pointSizeF() - 1))
+        fm = QtGui.QFontMetrics(f)
+        h = fm.height() + 6
+        genislik = min(fm.horizontalAdvance(metin) + 22, option.rect.width() - 10)
+        r = QtCore.QRectF(option.rect.x() + 6, option.rect.center().y() - h / 2, genislik, h)
+        p.save()
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        p.setFont(f)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QtGui.QColor(zemin))
+        p.drawRoundedRect(r, h / 2, h / 2)
+        p.setPen(QtGui.QColor(yazi))
+        p.drawText(r, int(Qt.AlignmentFlag.AlignCenter), fm.elidedText(metin, Qt.TextElideMode.ElideRight, int(r.width() - 12)))
+        p.restore()
 
     def _bitir(self, w):
         try:
@@ -470,16 +500,17 @@ class ListeFiltreleri:
 
 
 class Kart(QtWidgets.QFrame):
-    def __init__(self, baslik, tikla):
+    def __init__(self, baslik, tikla, vurgu="mavi"):
         super().__init__()
         self.setObjectName("kart")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._tikla = tikla
         v = QtWidgets.QVBoxLayout(self)
-        v.setContentsMargins(14, 8, 14, 8)
-        v.setSpacing(0)
+        v.setContentsMargins(18, 12, 18, 12)
+        v.setSpacing(2)
         self.sayi = QtWidgets.QLabel("–")
         self.sayi.setObjectName("kartSayi")
+        self.sayi.setProperty("vurgu", vurgu)
         b = QtWidgets.QLabel(baslik)
         b.setObjectName("kartBaslik")
         v.addWidget(self.sayi)
@@ -644,14 +675,17 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.nb.currentChanged.connect(self._sekme_degisti)
 
         ana_duzen = QtWidgets.QVBoxLayout(kap)
-        ana_duzen.setContentsMargins(6, 8, 6, 4)
+        ana_duzen.setContentsMargins(16, 14, 16, 8)
+        ana_duzen.setSpacing(10)
 
         # --- özet kartları
         kr = QtWidgets.QHBoxLayout()
         self.kartlar = {}
-        for anahtar, baslik in (("acik", "Açık işler"), ("encumen", "Bu ay encümen"), ("gecik", "Geciken işler"),
-                                ("harc", "Bu ay tahsil edilen harç"), ("parsel", "Pasif parsel — onay bekliyor")):
-            kt = Kart(baslik, lambda a=anahtar: self.kart_tikla(a))
+        kr.setSpacing(12)
+        for anahtar, baslik, vurgu in (("acik", "Açık işler", "mavi"), ("encumen", "Bu ay encümen", "yesil"),
+                                       ("gecik", "Geciken işler", "kirmizi"), ("harc", "Bu ay tahsil edilen harç", "turuncu"),
+                                       ("parsel", "Pasif parsel — onay bekliyor", "mor")):
+            kt = Kart(baslik, lambda a=anahtar: self.kart_tikla(a), vurgu)
             kr.addWidget(kt, 1)
             self.kartlar[anahtar] = kt
         ana_duzen.addLayout(kr)
@@ -660,7 +694,8 @@ class AnaPencere(QtWidgets.QMainWindow):
         ust = QtWidgets.QHBoxLayout()
         ust.addWidget(QtWidgets.QLabel("Ara:"))
         self.ara = AraKutu()
-        self.ara.setMinimumWidth(190)
+        self.ara.setMinimumWidth(230)
+        self.ara.setPlaceholderText("Kayıtlarda ara...")
         self.ara.textChanged.connect(lambda _: self.load_gecikmeli())
         ust.addWidget(self.ara)
         ust.addWidget(self._dugme("Yeni", self.yeni, "vurgu"))
@@ -822,7 +857,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.lejant = {}
         for ad in ek.DURUM_RENK:
             e = QtWidgets.QLabel(ad)
-            e.setContentsMargins(6, 0, 6, 0)
+            e.setObjectName("hap")
             self.lejant[ad] = e
             lg.addWidget(e)
         lg.addWidget(QtWidgets.QLabel("      Dosya:  ✓ var   ✗ yok   ? klasöre ulaşılamıyor"))
@@ -865,6 +900,7 @@ class AnaPencere(QtWidgets.QMainWindow):
 
     # ------------------------------------------------ tema ve yazı
     def tema_uygula(self):
+        et.ek_renk_uygula(ek, ek.KOYU)  # sekmelerin okuduğu ek.METIN/KART/VURGU... yeni jetonlara çekilir
         t = tema()
         app = QtWidgets.QApplication.instance()
         app.setPalette(palet_yap(t))
@@ -874,7 +910,8 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.koyu_eylem.setChecked(ek.KOYU)
         self.koyu_eylem.blockSignals(False)
         for ad, e in self.lejant.items():
-            e.setStyleSheet(f"background:{ek.DURUM_UI[ad]}; color:{t['METIN']};")
+            zemin, yazi = et.hap_renkleri(ek.DURUM_UI[ad], ek.KOYU)
+            e.setStyleSheet(f"background:{zemin}; color:{yazi};")
         self.tablo_yazi_uygula()
         self.model.layoutChanged.emit()
         self.detay_guncelle()
@@ -890,13 +927,8 @@ class AnaPencere(QtWidgets.QMainWindow):
 
     def tablo_yazi_uygula(self):
         n = ek.TABLO_PUNTO
-        f = QtGui.QFont("Segoe UI")
-        f.setPointSize(n)
-        self.tablo.setFont(f)
-        hf = QtGui.QFont("Segoe UI")
-        hf.setPointSize(max(9, n))
-        hf.setBold(True)
-        self.tablo.horizontalHeader().setFont(hf)
+        self.tablo.setFont(et.font_yap(n))
+        self.tablo.horizontalHeader().setFont(et.font_yap(max(8.5, round(n * 0.85, 1)), kalin=True, aralik=0.5))
         self.tablo.verticalHeader().setDefaultSectionSize(round(n * 2.8))
 
     def yazi_boyut(self, d):
@@ -1857,7 +1889,7 @@ def main():
     pen.silinen_hazirla()  # 'silinen' tablosuna eski_id sütunu (yoksa) eklenir; var olan veriye dokunulmaz
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setFont(QtGui.QFont("Segoe UI", 10))
+    app.setFont(et.font_yap(10))
     pencere = AnaPencere()
     if pencere._buyut:
         pencere.showMaximized()
