@@ -171,6 +171,35 @@ class KayitModel(QtCore.QAbstractTableModel):
         return kolon_baslik(k) + ok
 
 
+class ListeEditor(QtWidgets.QLineEdit):
+    """Tablo hücresinde liste seçimi: kutuya tıklayınca / ▾ simgesine basınca TÜM liste açılır, yazdıkça daralır
+    (içinde geçen aranır). Seçilen değer hemen kaydedilir; yeni bir değer yazıp Enter'a basarak da kaydedilebilir."""
+
+    def __init__(self, parent, degerler, bitir):
+        super().__init__(parent)
+        c = QtWidgets.QCompleter(degerler, self)
+        c.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        c.setFilterMode(Qt.MatchFlag.MatchContains)
+        c.setCompletionMode(QtWidgets.QCompleter.CompletionMode.PopupCompletion)
+        c.setMaxVisibleItems(15)
+        self.setCompleter(c)
+        c.activated.connect(lambda *_: QtCore.QTimer.singleShot(0, bitir))
+        ok = self.addAction(self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_ArrowDown),
+                            QtWidgets.QLineEdit.ActionPosition.TrailingPosition)
+        ok.triggered.connect(self.hepsini_goster)
+
+    def hepsini_goster(self):
+        c = self.completer()
+        if c is not None:
+            c.setCompletionPrefix("")
+            c.complete()
+
+    def mousePressEvent(self, e):
+        super().mousePressEvent(e)
+        if not self.text():
+            QtCore.QTimer.singleShot(0, self.hepsini_goster)
+
+
 class HucreDelegate(QtWidgets.QStyledItemDelegate):
     """Hücreye çift tıklayınca / F2 ile yerinde düzenleme. Kaydetme işini pencere.kaydet yapar."""
 
@@ -185,15 +214,8 @@ class HucreDelegate(QtWidgets.QStyledItemDelegate):
             return None
         t = ek.LISTE_ALAN.get(k)
         if t:
-            cb = QtWidgets.QComboBox(parent)
-            cb.setEditable(True)
-            cb.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
-            cb.addItems(ek.liste(t))
-            c = cb.completer()
-            c.setFilterMode(Qt.MatchFlag.MatchContains)
-            c.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-            cb.activated.connect(lambda _=0, w=cb: QtCore.QTimer.singleShot(0, lambda: self._bitir(w)))
-            ed = cb
+            ed = ListeEditor(parent, ek.liste(t), lambda: self._bitir(ed))
+            QtCore.QTimer.singleShot(0, ed.hepsini_goster)  # düzenleme başlar başlamaz liste açılır
         else:
             ed = QtWidgets.QLineEdit(parent)
         self.aktif = ed
@@ -209,23 +231,19 @@ class HucreDelegate(QtWidgets.QStyledItemDelegate):
 
     def setEditorData(self, editor, index):
         metin = index.data(Qt.ItemDataRole.EditRole) or ""
-        if isinstance(editor, QtWidgets.QComboBox):
-            editor.setEditText(metin)
-            editor.lineEdit().selectAll()
-        else:
-            editor.setText(metin)
-            editor.selectAll()
+        editor.setText(metin)
+        editor.selectAll()
 
     def setModelData(self, editor, model, index):
-        metin = editor.currentText() if isinstance(editor, QtWidgets.QComboBox) else editor.text()
+        metin = editor.text()
         iid = model.rows[index.row()][0]
         k = ek.TV_COLS[index.column()]
         QtCore.QTimer.singleShot(0, lambda: self.pencere.kaydet(iid, k, metin))  # düzenleyici kapandıktan sonra kaydet
 
     def updateEditorGeometry(self, editor, option, index):
         r = option.rect
-        if isinstance(editor, QtWidgets.QComboBox):
-            r = QtCore.QRect(r.x(), r.y(), max(r.width(), 150), r.height())
+        if isinstance(editor, ListeEditor):
+            r = QtCore.QRect(r.x(), r.y(), max(r.width(), 170), r.height())
         editor.setGeometry(r)
 
 
@@ -296,7 +314,7 @@ class AramaliCombo(QtWidgets.QComboBox):
 
     def _hemen(self):
         self._zaman.stop()
-        self._degis()
+        QtCore.QTimer.singleShot(0, self._degis)  # seçim işlemi bitince filtrele (açık liste ortasında yenileme yapılmaz)
 
 
 class TarihAraligi(QtWidgets.QWidget):
@@ -395,6 +413,9 @@ class ListeFiltreleri:
         for k, cb in self.cb.items():
             v = ek.liste(ek.LISTE_ALAN[k])
             self.vals[k] = set(v)
+            yeni = ["(Tümü)"] + v
+            if [cb.itemText(i) for i in range(cb.count())] == yeni or cb.view().isVisible():
+                continue  # değişmediyse veya liste şu an açıksa dokunma (açık liste kapanmasın)
             metin = cb.currentText()
             cb.blockSignals(True)
             cb.clear()
@@ -1432,7 +1453,7 @@ class AnaPencere(QtWidgets.QMainWindow):
             "\n\n(Veri > Son silinenler bölümünden 90 gün içinde geri getirebilirsiniz.)"
         if self.sor("Sil", msg):
             snap = ek.kayit_snapshot(ids)
-            zaman = ek.kayit_sil(ids)
+            zaman = pen.kayit_sil_idli(ids)  # eski numarayı da saklar (geri getirmede TKGM bağlantısı korunur)
             self.undo_push(f"Silme ({len(ids)} kayıt)", snap, zaman)
             self.load()
 
@@ -1602,7 +1623,7 @@ class AnaPencere(QtWidgets.QMainWindow):
             return
         if ek.q("SELECT 1 FROM kayit LIMIT 1") and self.sor(
                 "CSV Al", "Mevcut kayıtlar silinip dosyadaki kayıtlar yeniden yüklensin mi?\n(Hayır: mevcut kayıtlara eklenir)"):
-            ek.kayit_sil([r[0] for r in ek.q("SELECT id FROM kayit")])
+            pen.kayit_sil_idli([r[0] for r in ek.q("SELECT id FROM kayit")])
         n = 0
         for r in rows[1:]:
             d = {k: (ek.temiz(r[i]) if i < len(r) else "") for k, i in idx.items()}
@@ -1707,6 +1728,7 @@ class AnaPencere(QtWidgets.QMainWindow):
             ek.yedekle("geri_yukleme_oncesi_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
             ek.db_kopyala(p, ek.DB)
             ek.init_db()
+            pen.silinen_hazirla()
             self.undo_temizle()
             self.load()
             self.bilgi("Tamam", "Yedek geri yüklendi.")
@@ -1780,6 +1802,7 @@ class AnaPencere(QtWidgets.QMainWindow):
 
 def main():
     ek.init_db()
+    pen.silinen_hazirla()  # 'silinen' tablosuna eski_id sütunu (yoksa) eklenir; var olan veriye dokunulmaz
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setFont(QtGui.QFont("Segoe UI", 10))
