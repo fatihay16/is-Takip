@@ -15,7 +15,8 @@ Aynı veritabanı dosyası (imar_kayitlari.db) kullanılır; tablo yapısı değ
                            TKGM (Parsel Sorgu) açma.
 2. aşamada eklenenler   : Yeni kayıt / Formda düzenle / Satırı çoğalt, Toplu Güncelle, Listeler, Son silinenler,
                            Pasif Parseller, Rapor ayarları (encumen_qt_pencereler.py).
-Sonraki aşamalar        : Takvim penceresi, Grafikler sekmesi, Fen Klasörü sekmesi, parsel hareket zinciri grafiği.
+3. aşamada eklenenler   : Takvim, Grafikler sekmesi, Fen Klasörü sekmesi, Fen işlemi penceresi, parsel hareket listesi
+                           (encumen_qt_sekmeler.py).
 """
 import sys
 
@@ -40,6 +41,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
 import encumen_kayit as ek  # iş mantığı (Tkinter penceresi AÇILMAZ; yalnızca fonksiyonlar kullanılır)
+import encumen_qt_sekmeler as sek  # 3. aşama: Takvim, Grafikler, Fen Klasörü, parsel hareket listesi
 import encumen_qt_pencereler as pen  # 2. aşama pencereleri: Form, TopluGuncelle, Listeler, Silinenler, PasifListe, RaporAyar
 
 YAKINDA = "Bu pencere bir sonraki aşamada PySide6'ya taşınacak. Şimdilik eski programda (encumen_kayit.py) kullanılabilir."
@@ -358,10 +360,9 @@ class TarihAraligi(QtWidgets.QWidget):
 
     def _sec(self, ad):
         kt = self.kutu[ad]
-        dlg = TakvimDialog(self.window(), kt.text())
-        dlg.exec()
-        if dlg.sonuc is not None:
-            kt.setText(dlg.sonuc)
+        sonuc = sek.takvim_sec(self.window(), kt.text())
+        if sonuc is not None:
+            kt.setText(sonuc)
             self.preset = ""
             self.degis()
 
@@ -485,6 +486,11 @@ class AraKutu(QtWidgets.QLineEdit):
 
 # ---------------------------------------------------------------- ana pencere
 class AnaPencere(QtWidgets.QMainWindow):
+    # 3. aşama sekmeleri bu bileşenleri ana pencereden alır (tekrar yazılmasın diye)
+    ListeFiltreleriSinif = ListeFiltreleri
+    TarihAraligiSinif = TarihAraligi
+    AramaliComboSinif = AramaliCombo
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("İmar Uygulamaları - Encümen Karar ve Makbuz Kayıtları")
@@ -607,14 +613,10 @@ class AnaPencere(QtWidgets.QMainWindow):
         kap.setContentsMargins(0, 0, 0, 0)
         ana.addWidget(self.nb, 1)
         self.nb.addTab(kap, "Kayıtlar")
-        for ad in ("Grafikler", "Fen Klasörü"):
-            sf = QtWidgets.QWidget()
-            sv = QtWidgets.QVBoxLayout(sf)
-            et = QtWidgets.QLabel(f"“{ad}” sekmesi bir sonraki aşamada PySide6'ya taşınacak.\n"
-                                  "Şimdilik eski programda (encumen_kayit.py) kullanılabilir. Verileriniz aynı veritabanındadır.")
-            et.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            sv.addWidget(et)
-            self.nb.addTab(sf, ad)
+        self.grafikler = sek.GrafiklerSekmesi(self)
+        self.fen = sek.FenSekmesi(self)
+        self.nb.addTab(self.grafikler, "Grafikler")
+        self.nb.addTab(self.fen, "Fen Klasörü")
         self.nb.currentChanged.connect(self._sekme_degisti)
 
         sek = QtWidgets.QVBoxLayout(kap)
@@ -832,7 +834,10 @@ class AnaPencere(QtWidgets.QMainWindow):
         return super().eventFilter(nesne, olay)
 
     def _sekme_degisti(self, i):
-        pass  # Grafikler / Fen Klasörü sekmeleri sonraki aşamada
+        if i == 1:
+            self.grafikler.ciz_hepsi()
+        elif i == 2:
+            self.fen.sekme_acildi()
 
     # ------------------------------------------------ tema ve yazı
     def tema_uygula(self):
@@ -849,6 +854,8 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.tablo_yazi_uygula()
         self.model.layoutChanged.emit()
         self.detay_guncelle()
+        self.grafikler.ciz_hepsi()
+        self.fen.tema_degisti()
 
     def tema_degistir(self):
         self.edit_kapat()
@@ -1013,6 +1020,7 @@ class AnaPencere(QtWidgets.QMainWindow):
 
     def fil_yenile(self):
         self.lf.yenile()
+        self.grafikler.glf.yenile()
 
     def filtre_sifirla(self):
         self._sessiz = True
@@ -1097,10 +1105,13 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.durum_guncelle()
         self.kart_guncelle(tum)
         self.detay_guncelle()
+        self.grafikler.guncelle(tum)
         try:
             ek.fen_senkronla()  # yeni TKGM sonuçları Fen Klasörü'ne işlenir
         except Exception:
             pass
+        if self.nb.currentIndex() == 2:
+            self.fen.sekme_acildi()
 
     def yenile_koru(self, iid=None):
         kay = self.tablo.verticalScrollBar().value()
@@ -1336,6 +1347,11 @@ class AnaPencere(QtWidgets.QMainWindow):
         r = self.model.satir_bul(iid)
         if r < 0:
             return
+        if k in ek.DATES:  # tarih hücreleri takvimle düzenlenir (eski programdaki gibi)
+            s = sek.takvim_sec(self, self.model.rows[r][1].get(k, ""), ek.DATES[k])
+            if s is not None:
+                self.kaydet(iid, k, s)
+            return
         index = self.model.index(r, KOLON_NO[k])
         self.tablo.setCurrentIndex(index)
         self.tablo.edit(index)
@@ -1382,9 +1398,11 @@ class AnaPencere(QtWidgets.QMainWindow):
 
     def takvim_sec(self, ust, metin=""):
         """None: iptal, '': temizle, 'gg.aa.yyyy': seçilen tarih."""
-        dlg = TakvimDialog(ust, metin)
-        dlg.exec()
-        return dlg.sonuc
+        return sek.takvim_sec(ust, metin)
+
+    def zincir_detay(self, k):
+        """Parsel hareket listesi penceresi (Özet / Tablo / Grafik)."""
+        sek.ZincirDetay(self, k).exec()
 
     def sec_idler(self, idler):
         self.tablo.clearSelection()
