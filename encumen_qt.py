@@ -62,7 +62,8 @@ def tablo_fontu(tur):
 
 
 def mono_sutun_mu(k):
-    return k in MONO_SUTUN or "tarih" in k
+    # Tarih sütunları da ana arayüz gibi Segoe UI kullanır; yalnızca sayısal/kimlik sütunları monospace kalır.
+    return k in MONO_SUTUN
 
 
 SATIR_BOYA = False  # True: eski görünüm (tüm satır durum rengiyle boyanır). False: yalnızca "onay" sütununda renkli hap.
