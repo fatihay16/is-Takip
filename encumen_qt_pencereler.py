@@ -20,6 +20,59 @@ from PySide6.QtCore import Qt
 import encumen_kayit as ek
 
 
+# ---------------------------------------------------------------- silme / geri getirme (eski numarayı koruyan sürüm)
+def silinen_hazirla():
+    """'silinen' tablosuna eski kayıt numarasını (eski_id) tutan sütunu ekler. Var olan satırlara ve eski programa dokunmaz:
+    eski program sütun adlarını açıkça yazdığı için ek sütundan etkilenmez. Birden çok kez çağrılması zararsızdır."""
+    if "eski_id" not in [r[1] for r in ek.q("PRAGMA table_info(silinen)")]:
+        ek.q("ALTER TABLE silinen ADD COLUMN eski_id INTEGER")
+
+
+def kayit_sil_idli(ids):
+    """ek.kayit_sil ile aynı işi yapar (kaydı 'silinen' tablosuna kopyalayıp siler); ek olarak eski numarayı saklar.
+    Hepsi tek işlemdir. Silme zamanını döndürür."""
+    silinen_hazirla()
+    zaman = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c = ",".join(ek.KEYS)
+    con = sqlite3.connect(ek.DB)
+    try:
+        with con:
+            for i in ids:
+                con.execute(f"INSERT INTO silinen (silinme,{c},durum_tarihi,eski_id) SELECT ?,{c},durum_tarihi,id FROM kayit WHERE id=?",
+                            (zaman, i))
+                con.execute("DELETE FROM kayit WHERE id=?", (i,))
+    finally:
+        con.close()
+    return zaman
+
+
+def kayit_geri_idli(sids):
+    """'silinen' kayıtlarını geri getirir. Eski numarası biliniyorsa ve o numara boşsa kayıt AYNI numarayla döner
+    (böylece TKGM parsel sonucu ve Fen Klasörü bağlantısı yerinde kalır). Numara bilinmiyorsa (eski satır) veya doluysa
+    yeni numara alır; hiçbir kayıt ezilmez. Döndürür: [(eski_id, yeni_id, ayni_numara_mi), ...]"""
+    silinen_hazirla()
+    c = ",".join(ek.KEYS)
+    sonuc = []
+    con = sqlite3.connect(ek.DB)
+    try:
+        with con:
+            for sid in sids:
+                r = con.execute("SELECT eski_id FROM silinen WHERE sid=?", (sid,)).fetchone()
+                if r is None:
+                    continue
+                eski = r[0]
+                if eski is not None and con.execute("SELECT 1 FROM kayit WHERE id=?", (eski,)).fetchone() is None:
+                    con.execute(f"INSERT INTO kayit (id,{c},durum_tarihi) SELECT ?,{c},durum_tarihi FROM silinen WHERE sid=?", (eski, sid))
+                    sonuc.append((eski, eski, True))
+                else:
+                    cur = con.execute(f"INSERT INTO kayit ({c},durum_tarihi) SELECT {c},durum_tarihi FROM silinen WHERE sid=?", (sid,))
+                    sonuc.append((eski, cur.lastrowid, False))
+                con.execute("DELETE FROM silinen WHERE sid=?", (sid,))
+    finally:
+        con.close()
+    return sonuc
+
+
 def _dugme(metin, fonk, ad=""):
     b = QtWidgets.QPushButton(metin)
     if ad:
@@ -365,6 +418,7 @@ class Silinenler(QtWidgets.QDialog):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
+        silinen_hazirla()
         self.setWindowTitle("Son Silinenler (90 gün saklanır)")
         self.setModal(True)
         self.resize(960, 480)
@@ -405,11 +459,22 @@ class Silinenler(QtWidgets.QDialog):
     def geri(self):
         ids = self.secili()
         if ids:
-            ek.kayit_geri(ids)
+            try:
+                sonuc = kayit_geri_idli(ids)
+            except sqlite3.Error as ex:
+                self.app.hata("Geri getir", f"Kayıtlar geri getirilemedi:\n{ex}")
+                return
             self.yenile()
             self.app.undo_temizle()  # eski programdaki gibi: geri getirme sonrası Ctrl+Z geçmişi sıfırlanır
             self.app.load()
-            self.app.bilgi("Tamam", f"{len(ids)} kayıt geri getirildi.")
+            ayni = sum(1 for _, _, a in sonuc if a)
+            msg = f"{len(sonuc)} kayıt geri getirildi."
+            if ayni:
+                msg += f"\n{ayni} kayıt eski numarasıyla döndü (TKGM parsel sonucu ve Fen Klasörü bağlantısı korundu)."
+            if len(sonuc) - ayni:
+                msg += (f"\n{len(sonuc) - ayni} kayıt yeni numara aldı (eski numarası bilinmiyordu: bu kayıtlar önceki sürümde silinmiş); "
+                        "bu işlerin TKGM sonucu için Parsel Sorgu'yu yeniden çalıştırın.")
+            self.app.bilgi("Tamam", msg)
 
     def kalici(self):
         ids = self.secili()
