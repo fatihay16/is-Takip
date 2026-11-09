@@ -389,6 +389,9 @@ class GrafiklerSekmesi(QtWidgets.QWidget):
         f1.addStretch(1)
         v.addLayout(f1)
         self.gta = app.TarihAraligiSinif(self.guncelle)
+        self.gta.alan.setFixedWidth(150)
+        self.gta.hz.setFixedWidth(110)
+        self.gta.duzen.addStretch(1)
         v.addWidget(self.gta)
         ac = QtWidgets.QLabel("Bu sayfadaki filtreler yalnızca grafikleri etkiler. Varsayılan olarak tüm işler "
                               "(Tescillendi, Askıda Kaldı ve İptal dahil) hesaba katılır.")
