@@ -30,6 +30,62 @@ SERI = {
     True: ["#3B7BFF", "#6AA0F8", "#93C5FD", "#2F5FB3", "#BFDBFE", "#3B82F6", "#1E3A8A", "#7DA7E8"],
 }
 
+# ---- ek temalar: açık ya da koyu TABANDAN türetilir; yalnızca renkler değişir (anahtar kümesi hep aynıdır)
+def _turet(taban, **degisen):
+    t = dict(taban)
+    t.update(degisen)
+    return t
+
+
+OKYANUS = _turet(ACIK, BG="#E9F4F7", BASLIK="#F1F8FA", BHOV="#DCEDF2", METIN="#12303B", SOLUK="#62808B", KENAR="#CFE3EA",
+                 VURGU="#0A7F9E", VURGU_K="#07627A", SEC="#D4EEF5", LACIVERT="#0B4F6C", LACIVERT_YAZI="#D6F1F8",
+                 LACIVERT_SOLUK="#9BD0E0", MAVI_ZEMIN="#D4EBF3", GRI_ZEMIN="#E3EEF2", SAYI_MAVI="#0891B2")
+ZUMRUT = _turet(ACIK, BG="#EDF4F0", BASLIK="#F3F8F5", BHOV="#E2EEE7", METIN="#1C2B24", SOLUK="#677C71", KENAR="#D5E3DA",
+                VURGU="#0B8A5F", VURGU_K="#087148", SEC="#DCF1E4", LACIVERT="#0F4C3A", LACIVERT_YAZI="#D6F2E4",
+                LACIVERT_SOLUK="#9CD3B7", MAVI_ZEMIN="#D9EEE3", GRI_ZEMIN="#E4EDE8", SAYI_MAVI="#0B7285")
+KUM = _turet(ACIK, BG="#F4EFE6", KART="#FFFDF8", BASLIK="#F8F3EA", BHOV="#EDE4D3", METIN="#2B2418", SOLUK="#7E735F",
+             KENAR="#E3D9C6", VURGU="#C2410C", VURGU_K="#9A3412", SEC="#FBE9D6", LACIVERT="#5B3A1E", LACIVERT_YAZI="#F5E6D0",
+             LACIVERT_SOLUK="#D1B48C", MAVI_ZEMIN="#F1E6D3", GRI_ZEMIN="#EEE8DB", SAYI_MAVI="#8C5A2B")
+BORDO = _turet(ACIK, BG="#F6EEF0", BASLIK="#FAF3F5", BHOV="#EFE0E5", METIN="#2D1B22", SOLUK="#836C78", KENAR="#E8D8DE",
+               VURGU="#9F1239", VURGU_K="#7F0F2E", SEC="#F8DCE5", KIRMIZI="#DC2626", LACIVERT="#5F1233",
+               LACIVERT_YAZI="#FBE3EA", LACIVERT_SOLUK="#D9A0B5", MAVI_ZEMIN="#F3E1E8", GRI_ZEMIN="#EEE6E9",
+               SAYI_MAVI="#8E2B52")
+GRAFIT = _turet(KOYU, BG="#16171B", KART="#202126", BASLIK="#27282F", BHOV="#31323B", METIN="#ECECF1", SOLUK="#9A9CAB",
+                KENAR="#33343D", VURGU="#7C4DEB", VURGU_K="#A78BFA", SEC="#3A2F63", LACIVERT="#1F1F27",
+                LACIVERT_YAZI="#E4E4EC", LACIVERT_SOLUK="#9A9CAB", MAVI_ZEMIN="#2E2A4D", GRI_ZEMIN="#2C2D36",
+                YESIL_ZEMIN="#1D3B30", TURUNCU_ZEMIN="#47361A", KIRMIZI_ZEMIN="#4A2527", SAYI_MAVI="#A78BFA",
+                SAYI_MOR="#F0ABFC")
+
+# Seçenek listesi (sıra menüde görünen sıradır): anahtar -> (görünen ad, koyu tabanlı mı, jeton sözlüğü).
+# "koyu tabanlı" bayrağı durum renklerinin (pastel / koyu) ve okunaklı yazı tonlarının hangisinden türeyeceğini belirler.
+TEMALAR = {
+    "acik": ("Açık", False, ACIK),
+    "koyu": ("Koyu", True, KOYU),
+    "okyanus": ("Okyanus", False, OKYANUS),
+    "zumrut": ("Zümrüt", False, ZUMRUT),
+    "kum": ("Kum", False, KUM),
+    "bordo": ("Bordo", False, BORDO),
+    "grafit": ("Grafit", True, GRAFIT),
+}
+
+
+def tema_anahtarlari():
+    return list(TEMALAR)
+
+
+def tema_adi(anahtar):
+    return TEMALAR[anahtar][0] if anahtar in TEMALAR else TEMALAR["acik"][0]
+
+
+def tema_koyu_mu(anahtar):
+    return bool(TEMALAR[anahtar][1]) if anahtar in TEMALAR else False
+
+
+def sonraki_tema(anahtar):
+    liste = tema_anahtarlari()
+    return liste[(liste.index(anahtar) + 1) % len(liste)] if anahtar in liste else liste[0]
+
+
 EK_RENK_ANAHTARLARI = ("BG", "KART", "BASLIK", "BHOV", "METIN", "SOLUK", "KENAR", "VURGU", "VURGU_K", "SEC", "KIRMIZI")
 
 
@@ -53,21 +109,24 @@ def font_yap(punto=10, kalin=False, yari=False, mono=False, aralik=0.0):
     return f
 
 
-def jetonlar(koyu):
+def jetonlar(koyu, anahtar=None):
+    """anahtar verilirse o temanın jetonları, verilmezse açık/koyu jetonlar."""
+    if anahtar in TEMALAR:
+        return TEMALAR[anahtar][2]
     return KOYU if koyu else ACIK
 
 
-def birlestir(ek_tema, koyu):
+def birlestir(ek_tema, koyu, anahtar=None):
     """ek'in kendi tema sözlüğü + yeni jetonlar (yeni jetonlar kazanır; ek'te olup burada olmayan anahtarlar korunur)."""
     t = dict(ek_tema or {})
-    t.update(jetonlar(koyu))
+    t.update(jetonlar(koyu, anahtar))
     return t
 
 
-def ek_renk_uygula(ek, koyu):
+def ek_renk_uygula(ek, koyu, anahtar=None):
     """Sekmelerin doğrudan okuduğu ek.METIN/ek.KART... değişkenlerini yeni jetonlara çeker.
     Yalnızca ek'te ZATEN VAR OLAN renk adlarına dokunur; ek içindeki sözlük/işlev/ayar değişmez."""
-    t = jetonlar(koyu)
+    t = jetonlar(koyu, anahtar)
     for k in EK_RENK_ANAHTARLARI:
         if hasattr(ek, k):
             setattr(ek, k, t[k])
