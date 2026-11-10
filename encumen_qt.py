@@ -44,6 +44,7 @@ import encumen_kayit as ek  # iş mantığı (Tkinter penceresi AÇILMAZ; yalnı
 import encumen_qt_sekmeler as sek  # 3. aşama: Takvim, Grafikler, Fen Klasörü, parsel hareket listesi
 import encumen_qt_pencereler as pen  # 2. aşama pencereleri: Form, TopluGuncelle, Listeler, Silinenler, PasifListe, RaporAyar
 import encumen_tema as et  # görünüm jetonları (renk/QSS); iş mantığı içermez
+import v11_gorsel as v11g  # alternatif-tema tasarım katmanı; yalnızca görünüm
 
 YAKINDA = "Bu pencere bir sonraki aşamada PySide6'ya taşınacak. Şimdilik eski programda (encumen_kayit.py) kullanılabilir."
 
@@ -165,7 +166,7 @@ QSpinBox::up-arrow {{ image:url("{yukari}"); width:12px; height:8px; border:none
 
 
 def qss_yap(t):
-    return et.qss_yap(t) + ok_ikon_qss(t)
+    return et.qss_yap(t) + ok_ikon_qss(t) + v11g.qss_ek(t)
 
 
 # ---------------------------------------------------------------- tablo modeli
@@ -724,6 +725,7 @@ class Kart(QtWidgets.QFrame):
     def __init__(self, baslik, tikla, vurgu="mavi"):
         super().__init__()
         self.setObjectName("kart")
+        self.setProperty("vurgu", vurgu)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._tikla = tikla
         v = QtWidgets.QVBoxLayout(self)
@@ -787,8 +789,8 @@ class AnaPencere(QtWidgets.QMainWindow):
         self._gen = {k: VARSAYILAN_GENISLIK.get(k, 105) for k in ek.TV_COLS}
         self._gen_yukleniyor = False
 
-        kayitli = ek.ayar("tema_adi")  # yeni temalar; eski programın "tema" (açık/koyu) ayarı geriye uyumluluk için yedek
-        tema_ata(kayitli if kayitli in et.TEMALAR else ("koyu" if ek.ayar("tema") == "koyu" else "acik"))
+        kayitli = ek.ayar("tema_adi")  # kayıtlı tema varsa koru; yeni kurulum Kadastro ile başlar
+        tema_ata(kayitli if kayitli in et.TEMALAR else ("koyu" if ek.ayar("tema") == "koyu" else "kadastro"))
         try:
             ek.punto_ata(int(ek.ayar("yazi_boyut") or 10))
         except ValueError:
@@ -1132,6 +1134,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         app = QtWidgets.QApplication.instance()
         app.setPalette(palet_yap(t))
         app.setStyleSheet(qss_yap(t))
+        v11g.font_ata(app)
         self.tema_dugme.setText("◐  " + et.tema_adi(TEMA_ANAHTAR))  # tıklayınca sıradaki temaya geçer
         self.tema_dugme.setToolTip("Temayı değiştir (Ekran > Tema ile doğrudan seçebilirsiniz)")
         for k, a in self.tema_eylem.items():
