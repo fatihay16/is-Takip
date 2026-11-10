@@ -166,8 +166,8 @@ QSpinBox::up-arrow {{ image:url("{yukari}"); width:12px; height:8px; border:none
 """
 
 
-def qss_yap(t):
-    return et.qss_yap(t) + ok_ikon_qss(t) + v11g.qss_ek(t)
+def qss_yap(t, genis=False):
+    return et.qss_yap(t) + ok_ikon_qss(t) + v11g.qss_ek(t, genis)
 
 def ikon_ata(anahtar, renk=None, boyut=18):
     """V1.1 ikonlarını mevcut tema paletine göre üretir."""
@@ -953,7 +953,8 @@ class AnaPencere(QtWidgets.QMainWindow):
         ana_duzen.addLayout(kr)
 
         # --- arama + düğmeler + menüler
-        ust = AkisDuzeni(bosluk=11)
+        ust = AkisDuzeni()
+        self._ust_akisi = ust
         self.ara = AraKutu()
         self.ara.setMinimumWidth(230)
         self.ara.setClearButtonEnabled(True)
@@ -1022,7 +1023,8 @@ class AnaPencere(QtWidgets.QMainWindow):
         ana_duzen.addLayout(ust)
 
         # --- görünüm + liste filtreleri
-        f2 = AkisDuzeni(bosluk=11)
+        f2 = AkisDuzeni()
+        self._filtre_akisi = f2
         self.gorunum = QtWidgets.QComboBox()
         self.gorunum.addItems(ek.GORUNUMLER)
         self.gorunum.setMinimumWidth(230)
@@ -1160,6 +1162,23 @@ class AnaPencere(QtWidgets.QMainWindow):
                 return True
         return super().eventFilter(nesne, olay)
 
+    def resizeEvent(self, olay):
+        super().resizeEvent(olay)
+        if not hasattr(self, "_ust_akisi") or not hasattr(self, "_filtre_akisi"):
+            return
+        genis = self.width() >= 1500
+        bosluk = 14 if genis else 8
+        for duzen in (self._ust_akisi, self._filtre_akisi):
+            if duzen._bosluk != bosluk:
+                duzen._bosluk = bosluk
+                duzen.update()
+                duzen.invalidate()
+        if genis != getattr(self, "_v11_genis_mod", None):
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.setStyleSheet(qss_yap(tema(), genis))
+            self._v11_genis_mod = genis
+
     def _sekme_degisti(self, i):
         if i == 1:
             self.grafikler.ciz_hepsi()
@@ -1172,7 +1191,9 @@ class AnaPencere(QtWidgets.QMainWindow):
         t = tema()
         app = QtWidgets.QApplication.instance()
         app.setPalette(palet_yap(t))
-        app.setStyleSheet(qss_yap(t))
+        genis = self.width() >= 1500
+        app.setStyleSheet(qss_yap(t, genis))
+        self._v11_genis_mod = genis
         v11g.font_ata(app)
         # Tema değişince mevcut ikonları da yeni metin rengine göre yeniden çiz.
         for w in self.findChildren(QtWidgets.QAbstractButton):
