@@ -21,15 +21,19 @@ def font_ata(app):
     app.setFont(f)
 
 
-def qss_ek(t):
+def qss_ek(t, genis=False):
     """Mevcut QSS'in üzerine alternatif-tema görsel dilini uygular.
 
-    t, encumen_tema.py içindeki mevcut renk jetonlarıdır. Böylece eski yedi tema ve
-    yeni üç tema aynı görünüm katmanıyla çalışır.
+    Yarım ekranda eski sıkı ölçüler korunur; geniş ekranda boşluklar otomatik artar.
     """
     body = _font_aileleri(["IBM Plex Sans", "Segoe UI Variable", "Segoe UI", "Arial"])
     display = _font_aileleri(["Space Grotesk", "Segoe UI", "Arial"])
     mono = _font_aileleri(["IBM Plex Mono", "Consolas", "Courier New"])
+    dugme_bosluk = "8px 15px" if genis else "6px 12px"
+    kontrol_bosluk = "7px 10px" if genis else "5px 9px"
+    font_boyut = "9.5pt" if genis else "9pt"
+    sekme_bosluk = "9px 20px" if genis else "8px 17px"
+    sekme_aralik = "0 7px 0 0" if genis else "0 4px 0 0"
     return f"""
 /* V1.1 — tipografi ve yüzey dili */
 QWidget {{ font-family: {body}; }}
@@ -76,19 +80,19 @@ QLabel#kartBaslik {{ color: {t['SOLUK']}; font-size: 9pt; font-weight: 500; }}
 
 /* Eylemler ve giriş alanları */
 QPushButton {{
-    font-family: {body}; font-size: 9.5pt; font-weight: 550;
-    border-radius: 8px; padding: 8px 15px;
+    font-family: {body}; font-size: {font_boyut}; font-weight: 550;
+    border-radius: 8px; padding: {dugme_bosluk};
     margin: 1px 2px;
 }}
 QPushButton#vurgu {{ border-radius: 8px; font-weight: 650; }}
 QToolButton {{
-    font-family: {body}; font-size: 9.5pt; font-weight: 550;
-    border-radius: 8px; padding: 8px 13px;
+    font-family: {body}; font-size: {font_boyut}; font-weight: 550;
+    border-radius: 8px; padding: {dugme_bosluk};
     margin: 1px 2px;
 }}
 QLineEdit, QComboBox, QSpinBox, QDateEdit, QTextEdit, QPlainTextEdit {{
-    font-family: {body}; font-size: 9.5pt; border-radius: 8px;
-    padding: 7px 10px;
+    font-family: {body}; font-size: {font_boyut}; border-radius: 8px;
+    padding: {kontrol_bosluk};
 }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus,
 QTextEdit:focus, QPlainTextEdit:focus {{
@@ -129,7 +133,7 @@ QMenu::separator {{ height: 1px; background: {t['KENAR']}; margin: 4px 7px; }}
 /* Sekmeler, tablo ve detay alanı */
 QTabBar::tab {{
     background: transparent; color: {t['SOLUK']};
-    padding: 9px 20px; margin: 0 7px 0 0;
+    padding: {sekme_bosluk}; margin: {sekme_aralik};
     border: 1px solid transparent; border-radius: 7px;
     font-family: {body}; font-weight: 600;
 }}
