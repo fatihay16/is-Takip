@@ -940,7 +940,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.ara.addAction(ikon_ata("search", boyut=16), QtWidgets.QLineEdit.ActionPosition.LeadingPosition)
         self.ara.setPlaceholderText("Kayıtlarda ara...")
         self.ara.textChanged.connect(lambda _: self.load_gecikmeli())
-        ust.addWidget(cift(QtWidgets.QLabel(ikon_ata("search", boyut=16), "Ara:"), self.ara))
+        ust.addWidget(cift(QtWidgets.QLabel("Ara:"), self.ara))
         ust.addWidget(self._dugme("Yeni", self.yeni, "vurgu", ikon_adi="plus"))
         ust.addWidget(self._dugme("Formda Düzenle", self.duzenle, ikon_adi="pencil"))
         ust.addWidget(self._dugme("Toplu Güncelle", self.toplu, ikon_adi="layers"))
