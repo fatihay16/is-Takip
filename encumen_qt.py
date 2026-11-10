@@ -476,6 +476,87 @@ class TakvimDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class AkisDuzeni(QtWidgets.QLayout):
+    """Sığmayan öğeleri alt satıra saran düzen (dar/yarım ekranda filtre kutularının üst üste binmesini önler).
+    QHBoxLayout yerine kullanılır; addStretch/addSpacing çağrıları zararsızdır (yok sayılır)."""
+
+    def __init__(self, parent=None, bosluk=8):
+        super().__init__(parent)
+        self._ogeler = []
+        self._bosluk = bosluk
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._ogeler.append(item)
+
+    def addStretch(self, *_):
+        pass
+
+    def addSpacing(self, *_):
+        pass
+
+    def count(self):
+        return len(self._ogeler)
+
+    def itemAt(self, i):
+        return self._ogeler[i] if 0 <= i < len(self._ogeler) else None
+
+    def takeAt(self, i):
+        return self._ogeler.pop(i) if 0 <= i < len(self._ogeler) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, genislik):
+        return self._yerlestir(QtCore.QRect(0, 0, genislik, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._yerlestir(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QtCore.QSize()
+        for o in self._ogeler:
+            s = s.expandedTo(o.minimumSize())
+        m = self.contentsMargins()
+        return s + QtCore.QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _yerlestir(self, rect, sadece_olc):
+        m = self.contentsMargins()
+        e = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, satir_h = e.x(), e.y(), 0
+        for o in self._ogeler:
+            if o.isEmpty():
+                continue
+            b = o.sizeHint()
+            sonraki = x + b.width()
+            if sonraki > e.right() + 1 and satir_h > 0:   # sığmıyor: alt satıra geç
+                x, y, satir_h = e.x(), y + satir_h + self._bosluk, 0
+                sonraki = x + b.width()
+            if not sadece_olc:
+                o.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), b))
+            x = sonraki + self._bosluk
+            satir_h = max(satir_h, b.height())
+        return y + satir_h - rect.y() + m.bottom()
+
+
+def cift(*widgetlar, bosluk=6):
+    """Etiket + kutu gibi birbirinden ayrılmaması gereken öğeleri tek parça yapar (alt satıra birlikte geçerler)."""
+    k = QtWidgets.QWidget()
+    h = QtWidgets.QHBoxLayout(k)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(bosluk)
+    for w in widgetlar:
+        h.addWidget(w)
+    return k
+
+
 class TarihKutu(QtWidgets.QLineEdit):
     tiklandi = QtCore.Signal()
 
@@ -521,21 +602,19 @@ class TarihAraligi(QtWidgets.QWidget):
         super().__init__()
         self.degis = degis
         self.preset = ""
-        self.duzen = QtWidgets.QHBoxLayout(self)
+        self.duzen = AkisDuzeni(self)
         self.duzen.setContentsMargins(6, 0, 6, 6)
-        self.duzen.addWidget(QtWidgets.QLabel("Tarih aralığı:"))
         self.alan = QtWidgets.QComboBox()
         self.alan.addItems(list(ek.TARIH_ALANLARI))
         self.alan.setCurrentText("Encümen Tarih")
         self.alan.activated.connect(lambda _: self.degis())
-        self.duzen.addWidget(self.alan)
+        self.duzen.addWidget(cift(QtWidgets.QLabel("Tarih aralığı:"), self.alan))
         self.kutu = {}
         for ad in ("Başlangıç", "Bitiş"):
-            self.duzen.addWidget(QtWidgets.QLabel(ad + ":"))
             kt = TarihKutu()
             kt.tiklandi.connect(lambda ad=ad: self._sec(ad))
             self.kutu[ad] = kt
-            self.duzen.addWidget(kt)
+            self.duzen.addWidget(cift(QtWidgets.QLabel(ad + ":"), kt))
         self.hz = QtWidgets.QComboBox()
         self.hz.addItems(["Bu ay", "Geçen ay", "Son 30 gün", "Bu yıl", "Aralığı temizle"])
         self.hz.setPlaceholderText("Hızlı seç")
@@ -600,11 +679,10 @@ class ListeFiltreleri:
     def __init__(self, duzen, degis):
         self.cb, self.vals = {}, {}
         for k, ad in self.ALANLAR:
-            duzen.addWidget(QtWidgets.QLabel(ad + ":"))
             cb = AramaliCombo(degis)
             cb.addItem("(Tümü)")
             cb.setEditText("(Tümü)")
-            duzen.addWidget(cb)
+            duzen.addWidget(cift(QtWidgets.QLabel(ad + ":"), cb))
             self.cb[k] = cb
 
     def yenile(self):
@@ -656,6 +734,7 @@ class Kart(QtWidgets.QFrame):
         self.sayi.setProperty("vurgu", vurgu)
         b = QtWidgets.QLabel(baslik)
         b.setObjectName("kartBaslik")
+        b.setWordWrap(True)   # dar pencerede kart başlığı alt satıra geçer, kartlar üst üste binmez
         v.addWidget(self.sayi)
         v.addWidget(b)
 
@@ -693,7 +772,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("İmar Uygulamaları - Encümen Karar ve Makbuz Kayıtları")
         self.resize(1420, 780)
-        self.setMinimumSize(1000, 560)
+        self.setMinimumSize(820, 560)
         self.son = None
         self.siralama = None
         self.gizli = 0
@@ -835,13 +914,12 @@ class AnaPencere(QtWidgets.QMainWindow):
         ana_duzen.addLayout(kr)
 
         # --- arama + düğmeler + menüler
-        ust = QtWidgets.QHBoxLayout()
-        ust.addWidget(QtWidgets.QLabel("Ara:"))
+        ust = AkisDuzeni()
         self.ara = AraKutu()
         self.ara.setMinimumWidth(230)
         self.ara.setPlaceholderText("Kayıtlarda ara...")
         self.ara.textChanged.connect(lambda _: self.load_gecikmeli())
-        ust.addWidget(self.ara)
+        ust.addWidget(cift(QtWidgets.QLabel("Ara:"), self.ara))
         ust.addWidget(self._dugme("Yeni", self.yeni, "vurgu"))
         ust.addWidget(self._dugme("Formda Düzenle", self.duzenle))
         ust.addWidget(self._dugme("Toplu Güncelle", self.toplu))
@@ -903,56 +981,27 @@ class AnaPencere(QtWidgets.QMainWindow):
         ana_duzen.addLayout(ust)
 
         # --- görünüm + liste filtreleri
-        # Tek satırda sıkışıp üst üste binmelerini önlemek için filtreleri ayrı satırlara ayır.
-        f2_kap = QtWidgets.QWidget()
-        f2_kap.setObjectName("filtrelerAlani")
-        f2 = QtWidgets.QGridLayout(f2_kap)
-        f2.setContentsMargins(0, 0, 0, 0)
-        f2.setHorizontalSpacing(10)
-        f2.setVerticalSpacing(7)
-
-        f2.addWidget(QtWidgets.QLabel("Görünüm:"), 0, 0)
+        f2 = AkisDuzeni()
         self.gorunum = QtWidgets.QComboBox()
         self.gorunum.addItems(ek.GORUNUMLER)
-        self.gorunum.setMinimumWidth(180)
-        self.gorunum.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        self.gorunum.setMinimumWidth(230)
         self.gorunum.activated.connect(lambda _: self.degis())
-        f2.addWidget(self.gorunum, 0, 1)
-        f2.addWidget(self._dugme("Filtreleri Temizle", self.fil_temizle), 0, 2)
-        f2.setColumnStretch(1, 1)
-
-        filtre_satiri = QtWidgets.QHBoxLayout()
-        filtre_satiri.setSpacing(8)
-        self.lf = ListeFiltreleri(filtre_satiri, self.degis)
-        for cb in self.lf.cb.values():
-            cb.setMinimumWidth(145)
-            cb.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
-        filtre_kap = QtWidgets.QWidget()
-        filtre_kap.setLayout(filtre_satiri)
-        f2.addWidget(filtre_kap, 1, 0, 1, 3)
-
-        secenekler = QtWidgets.QHBoxLayout()
-        secenekler.setSpacing(18)
+        f2.addWidget(cift(QtWidgets.QLabel("Görünüm:"), self.gorunum))
+        self.lf = ListeFiltreleri(f2, self.degis)
+        f2.addWidget(self._dugme("Filtreleri Temizle", self.fil_temizle))
         self.eksik = QtWidgets.QCheckBox("Dosyası eksik olanlar (✗)")
         self.eksik.toggled.connect(lambda _: self.degis())
-        secenekler.addWidget(self.eksik)
+        f2.addWidget(self.eksik)
         self.parsel_f = QtWidgets.QCheckBox("Pasif parsel (onay bekliyor)")
         self.parsel_f.toggled.connect(lambda _: self.degis())
-        secenekler.addWidget(self.parsel_f)
-        secenekler.addStretch(1)
-        secenek_kap = QtWidgets.QWidget()
-        secenek_kap.setLayout(secenekler)
-        f2.addWidget(secenek_kap, 2, 0, 1, 3)
-
-        ana_duzen.addWidget(f2_kap)
+        f2.addWidget(self.parsel_f)
+        f2.addStretch(1)
+        ana_duzen.addLayout(f2)
 
         # --- tarih aralığı + gecikme + kayıtlı filtreler
         self.ta = TarihAraligi(self.degis)
         self.gecik = QtWidgets.QCheckBox("Geciken işler")
         self.gecik.toggled.connect(lambda _: self.degis())
-        self.ta.duzen.addSpacing(10)
-        self.ta.duzen.addWidget(self.gecik)
-        self.ta.duzen.addWidget(QtWidgets.QLabel("Eşik (gün):"))
         self.esik_kutu = QtWidgets.QSpinBox()
         self.esik_kutu.setRange(1, 365)
         self.esik_kutu.setKeyboardTracking(False)
@@ -961,8 +1010,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         except ValueError:
             self.esik_kutu.setValue(30)
         self.esik_kutu.valueChanged.connect(lambda _: self._esik_zaman.start())
-        self.ta.duzen.addWidget(self.esik_kutu)
-        self.ta.duzen.addStretch(1)
+        self.ta.duzen.addWidget(cift(self.gecik, QtWidgets.QLabel("Eşik (gün):"), self.esik_kutu, bosluk=8))
         self.gm = QtWidgets.QMenu(self)
         self.gm.aboutToShow.connect(self.gm_doldur)
         self.ta.duzen.addWidget(self._menu_dugme("Kayıtlı filtreler", self.gm))
