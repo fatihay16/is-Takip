@@ -837,6 +837,22 @@ class AnaPencere(QtWidgets.QMainWindow):
     # ------------------------------------------------ arayüz kurulumu
     def _eylem(self, menu, metin, fonk=None, aktif=True, kutulu=None):
         a = QtGui.QAction(metin if aktif else metin + "   (sonraki aşama)", self)
+        # Alternatif temadaki çizgi ikonları; menü metninin anlamına göre eşleştirilir.
+        ikon_esleme = (
+            (("yedek",), "database"), (("parsel sorgu", "ara"), "search"),
+            (("pasif parsel", "katman", "toplu"), "layers"),
+            (("liste", "klasör", "dosyayı aç", "kararı aç"), "folder"),
+            (("makbuz", "rapor", "yazdır", "pdf"), "receipt"),
+            (("csv", "aktar", "indir"), "download"),
+            (("sil", "çöp"), "trash"), (("düzenle", "değiştir"), "pencil"),
+            (("yenile", "geri al", "geri getir"), "refresh"),
+            (("tarih", "takvim"), "calendar"), (("tema", "görünüm", "ekran"), "sun"),
+        )
+        alt = metin.casefold()
+        for kelimeler, anahtar in ikon_esleme:
+            if any(k in alt for k in kelimeler):
+                a.setIcon(ikon_ata(anahtar, boyut=16))
+                break
         if kutulu is not None:
             a.setCheckable(True)
             a.setChecked(kutulu)
@@ -856,6 +872,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         b.setText(metin)
         if ikon_adi:
             b.setIcon(ikon_ata(ikon_adi))
+            b.setIconSize(QtCore.QSize(17, 17))
             b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         b.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         b.setMenu(menu)
@@ -933,7 +950,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         ana_duzen.addLayout(kr)
 
         # --- arama + düğmeler + menüler
-        ust = AkisDuzeni()
+        ust = AkisDuzeni(bosluk=11)
         self.ara = AraKutu()
         self.ara.setMinimumWidth(230)
         self.ara.setClearButtonEnabled(True)
@@ -1002,7 +1019,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         ana_duzen.addLayout(ust)
 
         # --- görünüm + liste filtreleri
-        f2 = AkisDuzeni()
+        f2 = AkisDuzeni(bosluk=11)
         self.gorunum = QtWidgets.QComboBox()
         self.gorunum.addItems(ek.GORUNUMLER)
         self.gorunum.setMinimumWidth(230)
