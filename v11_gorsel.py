@@ -7,6 +7,12 @@ encumen_qt.py / encumen_kayit.py içinde kalır. Alternatif dalın demo kayıtla
 from PySide6 import QtGui
 
 
+def _font_aileleri(tercihler):
+    """Kurulu fontlar arasından ilk uygun aileyi seç; eksik fontta güvenli geri dönüş."""
+    mevcut = set(QtGui.QFontDatabase.families())
+    return next((ad for ad in tercihler if ad in mevcut), tercihler[-1])
+
+
 def font_ata(app):
     """IBM Plex Sans varsa kullan; kurulu değilse Windows/Qt güvenli fontlarına düş."""
     f = QtGui.QFont()
@@ -21,9 +27,9 @@ def qss_ek(t):
     t, encumen_tema.py içindeki mevcut renk jetonlarıdır. Böylece eski yedi tema ve
     yeni üç tema aynı görünüm katmanıyla çalışır.
     """
-    body = "'IBM Plex Sans', 'Segoe UI Variable', 'Segoe UI', Arial"
-    display = "'Space Grotesk', 'Segoe UI', Arial"
-    mono = "'IBM Plex Mono', Consolas, monospace"
+    body = _font_aileleri(["IBM Plex Sans", "Segoe UI Variable", "Segoe UI", "Arial"])
+    display = _font_aileleri(["Space Grotesk", "Segoe UI", "Arial"])
+    mono = _font_aileleri(["IBM Plex Mono", "Consolas", "Courier New"])
     return f"""
 /* V1.1 — tipografi ve yüzey dili */
 QWidget {{ font-family: {body}; }}
