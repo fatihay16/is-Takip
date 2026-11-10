@@ -45,6 +45,7 @@ import encumen_qt_sekmeler as sek  # 3. aşama: Takvim, Grafikler, Fen Klasörü
 import encumen_qt_pencereler as pen  # 2. aşama pencereleri: Form, TopluGuncelle, Listeler, Silinenler, PasifListe, RaporAyar
 import encumen_tema as et  # görünüm jetonları (renk/QSS); iş mantığı içermez
 import v11_gorsel as v11g  # alternatif-tema tasarım katmanı; yalnızca görünüm
+import v11_ikonlar as v11i  # tema renkli vektörel ikonlar
 
 YAKINDA = "Bu pencere bir sonraki aşamada PySide6'ya taşınacak. Şimdilik eski programda (encumen_kayit.py) kullanılabilir."
 
@@ -167,6 +168,16 @@ QSpinBox::up-arrow {{ image:url("{yukari}"); width:12px; height:8px; border:none
 
 def qss_yap(t):
     return et.qss_yap(t) + ok_ikon_qss(t) + v11g.qss_ek(t)
+
+def ikon_ata(anahtar, renk=None, boyut=18):
+    """V1.1 ikonlarını mevcut tema paletine göre üretir."""
+    t = tema()
+    return v11i.ikon(anahtar, renk or t["SOLUK"], boyut)
+
+
+def eylem_ikonu(eylem, anahtar, renk=None):
+    eylem.setIcon(ikon_ata(anahtar, renk, 16))
+    return eylem
 
 
 # ---------------------------------------------------------------- tablo modeli
@@ -840,15 +851,21 @@ class AnaPencere(QtWidgets.QMainWindow):
         menu.addAction(a)
         return a
 
-    def _menu_dugme(self, metin, menu):
+    def _menu_dugme(self, metin, menu, ikon_adi=None):
         b = QtWidgets.QToolButton()
         b.setText(metin)
+        if ikon_adi:
+            b.setIcon(ikon_ata(ikon_adi))
+            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         b.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         b.setMenu(menu)
         return b
 
-    def _dugme(self, metin, fonk, ad="", aktif=True):
+    def _dugme(self, metin, fonk, ad="", aktif=True, ikon_adi=None):
         b = QtWidgets.QPushButton(metin)
+        if ikon_adi:
+            b.setIcon(ikon_ata(ikon_adi))
+            b.setIconSize(QtCore.QSize(17, 17))
         if ad:
             b.setObjectName(ad)
         if aktif:
@@ -892,11 +909,11 @@ class AnaPencere(QtWidgets.QMainWindow):
         kap = QtWidgets.QWidget()
         kap.setContentsMargins(0, 0, 0, 0)
         ana.addWidget(self.nb, 1)
-        self.nb.addTab(kap, "Kayıtlar")
+        self.nb.addTab(kap, ikon_ata("building", boyut=17), "Kayıtlar")
         self.grafikler = sek.GrafiklerSekmesi(self)
         self.fen = sek.FenSekmesi(self)
-        self.nb.addTab(self.grafikler, "Grafikler")
-        self.nb.addTab(self.fen, "Fen Klasörü")
+        self.nb.addTab(self.grafikler, ikon_ata("chart", boyut=17), "Grafikler")
+        self.nb.addTab(self.fen, ikon_ata("folder", boyut=17), "Fen Klasörü")
         self.nb.currentChanged.connect(self._sekme_degisti)
 
         ana_duzen = QtWidgets.QVBoxLayout(kap)
@@ -919,21 +936,23 @@ class AnaPencere(QtWidgets.QMainWindow):
         ust = AkisDuzeni()
         self.ara = AraKutu()
         self.ara.setMinimumWidth(230)
+        self.ara.setClearButtonEnabled(True)
+        self.ara.addAction(ikon_ata("search", boyut=16), QtWidgets.QLineEdit.ActionPosition.LeadingPosition)
         self.ara.setPlaceholderText("Kayıtlarda ara...")
         self.ara.textChanged.connect(lambda _: self.load_gecikmeli())
-        ust.addWidget(cift(QtWidgets.QLabel("Ara:"), self.ara))
-        ust.addWidget(self._dugme("Yeni", self.yeni, "vurgu"))
-        ust.addWidget(self._dugme("Formda Düzenle", self.duzenle))
-        ust.addWidget(self._dugme("Toplu Güncelle", self.toplu))
-        ust.addWidget(self._dugme("Sil", self.sil, "tehlike"))
-        ust.addWidget(self._dugme("Kararı Aç", lambda: self.ac("karar")))
-        ust.addWidget(self._dugme("Makbuzu Aç", lambda: self.ac("makbuz")))
+        ust.addWidget(cift(QtWidgets.QLabel(ikon_ata("search", boyut=16), "Ara:"), self.ara))
+        ust.addWidget(self._dugme("Yeni", self.yeni, "vurgu", ikon_adi="plus"))
+        ust.addWidget(self._dugme("Formda Düzenle", self.duzenle, ikon_adi="pencil"))
+        ust.addWidget(self._dugme("Toplu Güncelle", self.toplu, ikon_adi="layers"))
+        ust.addWidget(self._dugme("Sil", self.sil, "tehlike", ikon_adi="trash"))
+        ust.addWidget(self._dugme("Kararı Aç", lambda: self.ac("karar"), ikon_adi="folder"))
+        ust.addWidget(self._dugme("Makbuzu Aç", lambda: self.ac("makbuz"), ikon_adi="receipt"))
 
         ym = QtWidgets.QMenu(self)
         self._eylem(ym, "Şimdi yedekle", self.yedek_simdi)
         self._eylem(ym, "Yedek klasörünü seç", self.yedek_klasoru_sec)
         self._eylem(ym, "Yedekten geri yükle", self.yedek_geri_yukle)
-        ust.addWidget(self._menu_dugme("Yedek", ym))
+        ust.addWidget(self._menu_dugme("Yedek", ym, "database"))
 
         vm = QtWidgets.QMenu(self)
         self._eylem(vm, "Son işlemi geri al (Ctrl+Z)", self.geri_al)
@@ -946,7 +965,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self._eylem(vm, "Dosya klasörleri (isteğe bağlı)...", self.klasorler)
         vm.addSeparator()
         self._eylem(vm, "Son silinenler (geri getir)...", self.silinenler_ac)
-        ust.addWidget(self._menu_dugme("Veri", vm))
+        ust.addWidget(self._menu_dugme("Veri", vm, "layers"))
 
         rm = QtWidgets.QMenu(self)
         self._eylem(rm, "Görünen liste (yazdır / PDF)", self.rapor_liste)
@@ -954,7 +973,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self._eylem(rm, "Görünen listeyi Excel'e aktar (CSV)", self.excel_aktar)
         rm.addSeparator()
         self._eylem(rm, "Rapor başlığı ve imza ayarları...", self.rapor_ayar_ac)
-        ust.addWidget(self._menu_dugme("Rapor", rm))
+        ust.addWidget(self._menu_dugme("Rapor", rm, "receipt"))
 
         em = QtWidgets.QMenu(self)
         tm = em.addMenu("Tema")
@@ -978,7 +997,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.sutun_eylem = {}
         for k in ek.TV_COLS[1:]:
             self.sutun_eylem[k] = self._eylem(sm, ek.SUTUN_AD.get(k) or ek.LAB.get(k, k), self.sutun_uygula, kutulu=True)
-        ust.addWidget(self._menu_dugme("Ekran", em))
+        ust.addWidget(self._menu_dugme("Ekran", em, "sun"))
         ust.addStretch(1)
         ana_duzen.addLayout(ust)
 
@@ -990,7 +1009,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.gorunum.activated.connect(lambda _: self.degis())
         f2.addWidget(cift(QtWidgets.QLabel("Görünüm:"), self.gorunum))
         self.lf = ListeFiltreleri(f2, self.degis)
-        f2.addWidget(self._dugme("Filtreleri Temizle", self.fil_temizle))
+        f2.addWidget(self._dugme("Filtreleri Temizle", self.fil_temizle, ikon_adi="filter"))
         self.eksik = QtWidgets.QCheckBox("Dosyası eksik olanlar (✗)")
         self.eksik.toggled.connect(lambda _: self.degis())
         f2.addWidget(self.eksik)
@@ -1015,9 +1034,9 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.ta.duzen.addWidget(cift(self.gecik, QtWidgets.QLabel("Eşik (gün):"), self.esik_kutu, bosluk=8))
         self.gm = QtWidgets.QMenu(self)
         self.gm.aboutToShow.connect(self.gm_doldur)
-        self.ta.duzen.addWidget(self._menu_dugme("Kayıtlı filtreler", self.gm))
-        self.ta.duzen.addWidget(self._dugme("Parsel Sorgu", self.parsel_sorgu_ac))
-        self.ta.duzen.addWidget(self._dugme("Pasif Parseller", self.pasif_liste_ac))
+        self.ta.duzen.addWidget(self._menu_dugme("Kayıtlı filtreler", self.gm, "filter"))
+        self.ta.duzen.addWidget(self._dugme("Parsel Sorgu", self.parsel_sorgu_ac, ikon_adi="search"))
+        self.ta.duzen.addWidget(self._dugme("Pasif Parseller", self.pasif_liste_ac, ikon_adi="layers"))
         ana_duzen.addWidget(self.ta)
 
         # --- tablo + detay paneli
