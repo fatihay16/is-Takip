@@ -109,8 +109,19 @@ def kolon_baslik(k):
 
 
 # ---------------------------------------------------------------- tema
+TEMA_ANAHTAR = "acik"  # seçili tema (et.TEMALAR anahtarı)
+
+
+def tema_ata(anahtar):
+    """Seçili temayı belirler. ek.renk_ata ile temanın tabanı (açık/koyu) ek'e bildirilir; böylece durum renkleri,
+    takvim ve eski modül renkleri tabana uygun kalır. Bilinmeyen anahtar 'acik' sayılır."""
+    global TEMA_ANAHTAR
+    TEMA_ANAHTAR = anahtar if anahtar in et.TEMALAR else "acik"
+    ek.renk_ata(et.tema_koyu_mu(TEMA_ANAHTAR))
+
+
 def tema():
-    return et.birlestir(ek.TEMA_KOYU if ek.KOYU else ek.TEMA_ACIK, ek.KOYU)
+    return et.birlestir(ek.TEMA_KOYU if ek.KOYU else ek.TEMA_ACIK, ek.KOYU, TEMA_ANAHTAR)
 
 
 def palet_yap(t):
@@ -235,11 +246,69 @@ class KayitModel(QtCore.QAbstractTableModel):
         return et.tr_buyuk(kolon_baslik(k)) + ok
 
 
+RENKLI_ALAN = ("islem", "muellif")   # hücre listesinde yazıları renkli gösterilecek alanlar (durum listesi her zaman hap biçimli)
+
+
+def liste_rengi(metin):
+    """Liste değerine kalıcı (her açılışta aynı) bir vurgu rengi verir; kırmızı 'geciken' anlamına geldiği için kullanılmaz."""
+    import zlib
+    t = tema()
+    renkler = [t[k] for k in ("SAYI_MAVI", "SAYI_YESIL", "SAYI_TURUNCU", "SAYI_MOR", "VURGU") if t.get(k)] or [t["VURGU"]]
+    return renkler[zlib.crc32(str(metin).encode("utf-8")) % len(renkler)]
+
+
+class RenkliListeDelegate(QtWidgets.QStyledItemDelegate):
+    """Hücre listesi (tamamlayıcı açılır liste) öğelerini renkli çizer: durumlar tablodaki gibi hap, diğerleri renkli yazı."""
+
+    def __init__(self, parent, durum):
+        super().__init__(parent)
+        self.durum = durum
+
+    def sizeHint(self, option, index):
+        s = super().sizeHint(option, index)
+        return QtCore.QSize(s.width() + 24, max(s.height(), QtGui.QFontMetrics(option.font).height() + 10))
+
+    def paint(self, p, option, index):
+        metin = index.data(Qt.ItemDataRole.DisplayRole)
+        if not metin:
+            return super().paint(p, option, index)
+        opt = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        stil = opt.widget.style() if opt.widget else QtWidgets.QApplication.style()
+        stil.drawControl(QtWidgets.QStyle.ControlElement.CE_ItemViewItem, opt, p, opt.widget)  # seçim/üzerine gelme zemini
+        f = QtGui.QFont(option.font)
+        p.save()
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        if self.durum:
+            zemin, yazi = et.hap_renkleri(ek.DURUM_UI.get(metin) or tema()["GRI_ZEMIN"], ek.KOYU)
+            f.setBold(True)
+            f.setPointSizeF(max(7.5, f.pointSizeF() - 1))
+            fm = QtGui.QFontMetrics(f)
+            h = fm.height() + 6
+            genislik = min(fm.horizontalAdvance(metin) + 22, option.rect.width() - 10)
+            r = QtCore.QRectF(option.rect.x() + 6, option.rect.center().y() - h / 2, genislik, h)
+            p.setFont(f)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QtGui.QColor(zemin))
+            p.drawRoundedRect(r, h / 2, h / 2)
+            p.setPen(QtGui.QColor(yazi))
+            p.drawText(r, int(Qt.AlignmentFlag.AlignCenter), fm.elidedText(metin, Qt.TextElideMode.ElideRight, int(r.width() - 12)))
+        else:
+            f.setWeight(QtGui.QFont.Weight.DemiBold)
+            p.setFont(f)
+            p.setPen(QtGui.QColor(liste_rengi(metin)))
+            r = option.rect.adjusted(10, 0, -6, 0)
+            p.drawText(r, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                       QtGui.QFontMetrics(f).elidedText(metin, Qt.TextElideMode.ElideRight, r.width()))
+        p.restore()
+
+
 class ListeEditor(QtWidgets.QLineEdit):
     """Tablo hücresinde liste seçimi: kutuya tıklayınca / ▾ simgesine basınca TÜM liste açılır, yazdıkça daralır
     (içinde geçen aranır). Seçilen değer hemen kaydedilir; yeni bir değer yazıp Enter'a basarak da kaydedilebilir."""
 
-    def __init__(self, parent, degerler, bitir):
+    def __init__(self, parent, degerler, bitir, alan=""):
         super().__init__(parent)
         c = QtWidgets.QCompleter(degerler, self)
         c.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -248,6 +317,9 @@ class ListeEditor(QtWidgets.QLineEdit):
         c.setMaxVisibleItems(15)
         c.setPopup(QtWidgets.QListView())
         c.popup().setStyleSheet(et.tamamlayici_popup_qss(tema()))
+        durum = any(d in ek.DURUM_UI for d in degerler)   # durum listesi (Tescilde bekliyor...) tablodaki gibi hap görünür
+        if durum or alan in RENKLI_ALAN:
+            c.popup().setItemDelegate(RenkliListeDelegate(c.popup(), durum))
         self.setCompleter(c)
         c.activated.connect(lambda *_: QtCore.QTimer.singleShot(0, bitir))
         ok = self.addAction(self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_ArrowDown),
@@ -310,7 +382,7 @@ class HucreDelegate(QtWidgets.QStyledItemDelegate):
             return None
         t = ek.LISTE_ALAN.get(k)
         if t:
-            ed = ListeEditor(parent, ek.liste(t), lambda: self._bitir(ed))
+            ed = ListeEditor(parent, ek.liste(t), lambda: self._bitir(ed), alan=k)
             QtCore.QTimer.singleShot(0, ed.hepsini_goster)  # düzenleme başlar başlamaz liste açılır
         else:
             ed = QtWidgets.QLineEdit(parent)
@@ -636,7 +708,8 @@ class AnaPencere(QtWidgets.QMainWindow):
         self._gen = {k: VARSAYILAN_GENISLIK.get(k, 105) for k in ek.TV_COLS}
         self._gen_yukleniyor = False
 
-        ek.renk_ata(ek.ayar("tema") == "koyu")
+        kayitli = ek.ayar("tema_adi")  # yeni temalar; eski programın "tema" (açık/koyu) ayarı geriye uyumluluk için yedek
+        tema_ata(kayitli if kayitli in et.TEMALAR else ("koyu" if ek.ayar("tema") == "koyu" else "acik"))
         try:
             ek.punto_ata(int(ek.ayar("yazi_boyut") or 10))
         except ValueError:
@@ -804,7 +877,17 @@ class AnaPencere(QtWidgets.QMainWindow):
         ust.addWidget(self._menu_dugme("Rapor", rm))
 
         em = QtWidgets.QMenu(self)
-        self.koyu_eylem = self._eylem(em, "Koyu tema", self.tema_degistir, kutulu=ek.KOYU)
+        tm = em.addMenu("Tema")
+        self.tema_grup = QtGui.QActionGroup(self)
+        self.tema_grup.setExclusive(True)
+        self.tema_eylem = {}
+        for k in et.tema_anahtarlari():
+            a = QtGui.QAction(et.tema_adi(k), self)
+            a.setCheckable(True)
+            self.tema_grup.addAction(a)
+            a.triggered.connect(lambda _=False, k=k: self.tema_sec(k))
+            tm.addAction(a)
+            self.tema_eylem[k] = a
         self.detay_eylem = self._eylem(em, "Detay paneli (F3)", self.detay_ac_kapa, kutulu=False)
         em.addSeparator()
         self._eylem(em, "Yazıyı büyüt (Ctrl + tekerlek yukarı  /  Ctrl +)", lambda: self.yazi_boyut(1))
@@ -971,15 +1054,17 @@ class AnaPencere(QtWidgets.QMainWindow):
 
     # ------------------------------------------------ tema ve yazı
     def tema_uygula(self):
-        et.ek_renk_uygula(ek, ek.KOYU)  # sekmelerin okuduğu ek.METIN/KART/VURGU... yeni jetonlara çekilir
+        et.ek_renk_uygula(ek, ek.KOYU, TEMA_ANAHTAR)  # sekmelerin okuduğu ek.METIN/KART/VURGU... yeni jetonlara çekilir
         t = tema()
         app = QtWidgets.QApplication.instance()
         app.setPalette(palet_yap(t))
         app.setStyleSheet(qss_yap(t))
-        self.tema_dugme.setText("◐  Açık tema" if ek.KOYU else "◐  Koyu tema")
-        self.koyu_eylem.blockSignals(True)
-        self.koyu_eylem.setChecked(ek.KOYU)
-        self.koyu_eylem.blockSignals(False)
+        self.tema_dugme.setText("◐  " + et.tema_adi(TEMA_ANAHTAR))  # tıklayınca sıradaki temaya geçer
+        self.tema_dugme.setToolTip("Temayı değiştir (Ekran > Tema ile doğrudan seçebilirsiniz)")
+        for k, a in self.tema_eylem.items():
+            a.blockSignals(True)
+            a.setChecked(k == TEMA_ANAHTAR)
+            a.blockSignals(False)
         for ad, e in self.lejant.items():
             zemin, yazi = et.hap_renkleri(ek.DURUM_UI[ad], ek.KOYU)
             e.setStyleSheet(f"background:{zemin}; color:{yazi};")
@@ -990,9 +1075,14 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.fen.tema_degisti()
 
     def tema_degistir(self):
+        """Bant düğmesi: sıradaki temaya geçer."""
+        self.tema_sec(et.sonraki_tema(TEMA_ANAHTAR))
+
+    def tema_sec(self, anahtar):
         self.edit_kapat()
-        ek.renk_ata(not ek.KOYU)
-        ayar_yaz("tema", "koyu" if ek.KOYU else "acik")
+        tema_ata(anahtar)
+        ayar_yaz("tema_adi", TEMA_ANAHTAR)
+        ayar_yaz("tema", "koyu" if ek.KOYU else "acik")  # eski program açık/koyu ayarını okumaya devam eder
         self.tema_uygula()
         self.kart_guncelle(self.tum_kayitlar())  # kart sayılarının kırmızı rengi temaya göre yenilenir
 
