@@ -903,23 +903,48 @@ class AnaPencere(QtWidgets.QMainWindow):
         ana_duzen.addLayout(ust)
 
         # --- görünüm + liste filtreleri
-        f2 = QtWidgets.QHBoxLayout()
-        f2.addWidget(QtWidgets.QLabel("Görünüm:"))
+        # Tek satırda sıkışıp üst üste binmelerini önlemek için filtreleri ayrı satırlara ayır.
+        f2_kap = QtWidgets.QWidget()
+        f2_kap.setObjectName("filtrelerAlani")
+        f2 = QtWidgets.QGridLayout(f2_kap)
+        f2.setContentsMargins(0, 0, 0, 0)
+        f2.setHorizontalSpacing(10)
+        f2.setVerticalSpacing(7)
+
+        f2.addWidget(QtWidgets.QLabel("Görünüm:"), 0, 0)
         self.gorunum = QtWidgets.QComboBox()
         self.gorunum.addItems(ek.GORUNUMLER)
-        self.gorunum.setMinimumWidth(300)
+        self.gorunum.setMinimumWidth(180)
+        self.gorunum.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
         self.gorunum.activated.connect(lambda _: self.degis())
-        f2.addWidget(self.gorunum)
-        self.lf = ListeFiltreleri(f2, self.degis)
-        f2.addWidget(self._dugme("Filtreleri Temizle", self.fil_temizle))
+        f2.addWidget(self.gorunum, 0, 1)
+        f2.addWidget(self._dugme("Filtreleri Temizle", self.fil_temizle), 0, 2)
+        f2.setColumnStretch(1, 1)
+
+        filtre_satiri = QtWidgets.QHBoxLayout()
+        filtre_satiri.setSpacing(8)
+        self.lf = ListeFiltreleri(filtre_satiri, self.degis)
+        for cb in self.lf.cb.values():
+            cb.setMinimumWidth(145)
+            cb.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        filtre_kap = QtWidgets.QWidget()
+        filtre_kap.setLayout(filtre_satiri)
+        f2.addWidget(filtre_kap, 1, 0, 1, 3)
+
+        secenekler = QtWidgets.QHBoxLayout()
+        secenekler.setSpacing(18)
         self.eksik = QtWidgets.QCheckBox("Dosyası eksik olanlar (✗)")
         self.eksik.toggled.connect(lambda _: self.degis())
-        f2.addWidget(self.eksik)
+        secenekler.addWidget(self.eksik)
         self.parsel_f = QtWidgets.QCheckBox("Pasif parsel (onay bekliyor)")
         self.parsel_f.toggled.connect(lambda _: self.degis())
-        f2.addWidget(self.parsel_f)
-        f2.addStretch(1)
-        ana_duzen.addLayout(f2)
+        secenekler.addWidget(self.parsel_f)
+        secenekler.addStretch(1)
+        secenek_kap = QtWidgets.QWidget()
+        secenek_kap.setLayout(secenekler)
+        f2.addWidget(secenek_kap, 2, 0, 1, 3)
+
+        ana_duzen.addWidget(f2_kap)
 
         # --- tarih aralığı + gecikme + kayıtlı filtreler
         self.ta = TarihAraligi(self.degis)
