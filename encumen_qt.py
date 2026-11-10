@@ -957,7 +957,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.ara = AraKutu()
         self.ara.setMinimumWidth(230)
         self.ara.setClearButtonEnabled(True)
-        self.ara.addAction(ikon_ata("search", boyut=16), QtWidgets.QLineEdit.ActionPosition.LeadingPosition)
+        self.ara_ikon_eylem = self.ara.addAction(ikon_ata("search", boyut=16), QtWidgets.QLineEdit.ActionPosition.LeadingPosition)
         self.ara.setPlaceholderText("Kayıtlarda ara...")
         self.ara.textChanged.connect(lambda _: self.load_gecikmeli())
         ust.addWidget(cift(QtWidgets.QLabel("Ara:"), self.ara))
@@ -1186,7 +1186,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         self.nb.setTabIcon(0, ikon_ata("building", boyut=17))
         self.nb.setTabIcon(1, ikon_ata("chart", boyut=17))
         self.nb.setTabIcon(2, ikon_ata("folder", boyut=17))
-        self.ara.addAction(ikon_ata("search", boyut=16), QtWidgets.QLineEdit.ActionPosition.LeadingPosition)
+        self.ara_ikon_eylem.setIcon(ikon_ata("search", boyut=16))
         self.tema_dugme.setText("◐  " + et.tema_adi(TEMA_ANAHTAR))  # tıklayınca sıradaki temaya geçer
         self.tema_dugme.setToolTip("Temayı değiştir (Ekran > Tema ile doğrudan seçebilirsiniz)")
         for k, a in self.tema_eylem.items():
