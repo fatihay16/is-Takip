@@ -67,6 +67,67 @@ def test_yazi_sistemi_qss_ve_font_aileleri():
     assert "font-weight" not in baslik and "font-size" not in baslik     # başlık fontunu kod yönetir (ölçeklenir)
 
 
+# ---------------------------------------------------------------- ek temalar (Okyanus, Zümrüt, Kum, Bordo, Grafit)
+def _lum(hexkod):
+    r, g, b = (v / 255 for v in et._rgb(hexkod))
+    f = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def _kontrast(a, b):
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def test_tema_kayit_defteri():
+    assert list(et.TEMALAR)[:2] == ["acik", "koyu"] and len(et.TEMALAR) == 7
+    assert {"okyanus", "zumrut", "kum", "bordo", "grafit"} <= set(et.TEMALAR)
+    for k, (ad, koyu, jeton) in et.TEMALAR.items():
+        assert ad and isinstance(koyu, bool)
+        assert set(jeton) == set(et.ACIK), k              # her temada aynı anahtarlar (eksik jeton QSS'i bozar)
+        assert all(re.fullmatch(r"#[0-9A-Fa-f]{6}", v) for v in jeton.values()), k
+    assert et.tema_koyu_mu("grafit") and et.tema_koyu_mu("koyu") and not et.tema_koyu_mu("bordo")
+    assert et.tema_adi("okyanus") == "Okyanus" and et.tema_adi("yok") == "Açık"
+    assert et.sonraki_tema("grafit") == "acik" and et.sonraki_tema("acik") == "koyu" and et.sonraki_tema("yok") == "acik"
+
+
+def test_jeton_secimi_geriye_uyumlu():
+    assert et.jetonlar(False) is et.ACIK and et.jetonlar(True) is et.KOYU          # eski çağrı biçimi aynen çalışır
+    assert et.jetonlar(False, "bordo") is et.BORDO and et.jetonlar(True, "yok") is et.KOYU
+    assert et.birlestir({"ESKI": "#111111"}, False, "kum")["BG"] == et.KUM["BG"]
+    assert et.birlestir({"ESKI": "#111111"}, False)["BG"] == et.ACIK["BG"]
+    ek = types.SimpleNamespace(METIN="x", KART="x")
+    et.ek_renk_uygula(ek, False, "okyanus")
+    assert ek.METIN == et.OKYANUS["METIN"] and ek.KART == et.OKYANUS["KART"]
+
+
+def test_tum_temalarda_okunaklilik_kontrasti():
+    for k, (ad, koyu, t) in et.TEMALAR.items():
+        assert _kontrast(t["METIN"], t["KART"]) >= 7, (k, "metin/kart")
+        assert _kontrast(t["METIN"], t["BG"]) >= 7, (k, "metin/zemin")
+        assert _kontrast(t["SOLUK"], t["KART"]) >= 3.5, (k, "soluk/kart")
+        if k not in ("acik", "koyu"):   # mevcut Açık/Koyu temalara dokunulmadı (Koyu'da beyaz yazı/vurgu = 3,8); eşik yeni temalar içindir
+            assert _kontrast("#FFFFFF", t["VURGU"]) >= 4.2, (k, "beyaz yazı/vurgu düğmesi")
+        assert _kontrast(t["LACIVERT_YAZI"], t["LACIVERT"]) >= 7, (k, "bant yazısı")
+        assert _kontrast(t["KIRMIZI"], t["KART"]) >= 3.5, (k, "kırmızı yazı/kart")
+
+
+def test_tum_temalarda_qss_uretilir():
+    for k, (ad, koyu, t) in et.TEMALAR.items():
+        q = et.qss_yap(t)
+        assert q.count("{") == q.count("}") and "{t[" not in q and t["VURGU"] in q, k
+        assert et.tamamlayici_popup_qss(t).count("{") == et.tamamlayici_popup_qss(t).count("}")
+
+
+def test_durum_hapi_tum_durum_renklerinde_okunur():
+    # durum renkleri açık/koyu tabana göre ek içinden gelir; hap yazısı zeminle aynı renk ailesinde ve okunaklı olmalı
+    for koyu, zeminler in ((False, ["#d4f0d4", "#fff2b8", "#d3e5ff", "#ffdcb8", "#e8d6f5", "#bfe9e4", "#e5e7eb", "#fecaca"]),
+                           (True, ["#173C30", "#4A3817", "#1F3A63", "#4A2323", "#26364E"])):
+        for z in zeminler:
+            zemin, yazi = et.hap_renkleri(z, koyu)
+            assert zemin == z and _kontrast(yazi, zemin) >= 3.5, (koyu, z, yazi)
+
+
 if __name__ == "__main__":
     for ad, fn in list(globals().items()):
         if ad.startswith("test_"):
