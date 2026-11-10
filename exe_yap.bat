@@ -9,7 +9,7 @@ echo  Imar Uygulamalari - PySide6 EXE olusturuluyor
 echo ============================================
 
 rem Yeni arayuzun ve gerekli modullerin varligini kontrol et.
-for %%F in (encumen_qt.py encumen_qt_pencereler.py encumen_qt_sekmeler.py encumen_tema.py encumen_kayit.py parsel_baslat.py parsel_sorgu_modulu.py requirements.txt) do (
+for %%F in (encumen_qt.py encumen_qt_pencereler.py encumen_qt_sekmeler.py encumen_tema.py v11_gorsel.py encumen_kayit.py parsel_baslat.py parsel_sorgu_modulu.py requirements.txt) do (
     if not exist "%%F" (
         echo HATA: %%F bulunamadi. Proje dosyalari eksik.
         pause
@@ -75,7 +75,7 @@ if exist ImarUygulamalari.spec del /q ImarUygulamalari.spec
 
 echo.
 echo [4/5] PySide6 ana programi paketleniyor...
-set "PYI_ARGS=--noconfirm --clean --onefile --windowed --name ImarUygulamalari --distpath dist --workpath build --specpath . --paths . --hidden-import encumen_qt_pencereler --hidden-import encumen_qt_sekmeler --hidden-import encumen_tema --hidden-import encumen_kayit --hidden-import parsel_baslat --hidden-import parsel_sorgu_modulu"
+set "PYI_ARGS=--noconfirm --clean --onefile --windowed --name ImarUygulamalari --distpath dist --workpath build --specpath . --paths . --hidden-import encumen_qt_pencereler --hidden-import encumen_qt_sekmeler --hidden-import encumen_tema --hidden-import v11_gorsel --hidden-import encumen_kayit --hidden-import parsel_baslat --hidden-import parsel_sorgu_modulu"
 
 if exist encumen.ico (
     %PY% -m PyInstaller %PYI_ARGS% --icon "encumen.ico" --add-data "encumen.ico;." encumen_qt.py
