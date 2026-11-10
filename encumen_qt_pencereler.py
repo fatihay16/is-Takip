@@ -11,6 +11,7 @@ Pencereler ana pencerenin (AnaPencere) şu yardımcılarını kullanır:
     undo_temizle, app.load / yenile_koru, app.bilgi / uyari / hata / sor, app.parsel_onay_kaldir
 """
 import os
+import json
 import sqlite3
 import datetime
 
@@ -18,6 +19,51 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
 import encumen_kayit as ek
+
+
+# ---------------------------------------------------------------- seçim listelerinde özel sıra
+def _sira_oku(tur):
+    """Kullanıcının belirlediği sıra (ayar: liste_sira_<tur>, JSON). Boş/bozuksa [] (= varsayılan sıra)."""
+    try:
+        s = json.loads(ek.ayar("liste_sira_" + tur) or "[]")
+        return [x for x in s if isinstance(x, str)] if isinstance(s, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _sira_yaz(tur, liste):
+    ek.q("INSERT OR REPLACE INTO ayar VALUES (?,?)", ("liste_sira_" + tur, json.dumps(list(liste), ensure_ascii=False)))
+
+
+def sira_uygula(degerler, sira):
+    """Değerleri kayıtlı sıraya dizer; sırada olmayanlar (yeni eklenenler) özgün sırayla sona gider."""
+    if not sira:
+        return list(degerler)
+    konum = {d: i for i, d in enumerate(sira)}
+    return sorted(degerler, key=lambda d: konum.get(d, len(sira)))
+
+
+def liste_tasi(liste, secili, yon):
+    """Seçili değerleri yon (-1 yukarı, +1 aşağı) bir basamak kaydırır; birden çok seçimde blok olarak, sınırda durur."""
+    liste = list(liste)
+    secili = set(secili)
+    for i in (range(len(liste)) if yon < 0 else range(len(liste) - 1, -1, -1)):
+        j = i + yon
+        if liste[i] in secili and 0 <= j < len(liste) and liste[j] not in secili:
+            liste[i], liste[j] = liste[j], liste[i]
+    return liste
+
+
+_ORIJINAL_LISTE = ek.liste
+
+
+def _sirali_liste(tur, *a, **k):
+    return sira_uygula(_ORIJINAL_LISTE(tur, *a, **k), _sira_oku(tur))
+
+
+if not getattr(ek.liste, "_siralamali", False):   # tüm açılır listeler (hücre, form, filtre) aynı sırayı kullanır
+    _sirali_liste._siralamali = True
+    ek.liste = _sirali_liste
 
 
 # ---------------------------------------------------------------- silme / geri getirme (eski numarayı koruyan sürüm)
@@ -293,6 +339,13 @@ class Listeler(QtWidgets.QDialog):
         h2.addWidget(_dugme("Toplu Ekle", self.toplu))
         v.addLayout(h2)
         v.addWidget(_dugme("Benzer adları birleştir", self.birlestir))
+        h3 = QtWidgets.QHBoxLayout()
+        h3.addWidget(_dugme("▲ Yukarı", lambda: self.tasi(-1)))
+        h3.addWidget(_dugme("▼ Aşağı", lambda: self.tasi(1)))
+        h3.addWidget(_dugme("Sırayı sıfırla", self.sira_sifirla))
+        v.addLayout(h3)
+        QtGui.QShortcut(QtGui.QKeySequence("Alt+Up"), self, activated=lambda: self.tasi(-1))
+        QtGui.QShortcut(QtGui.QKeySequence("Alt+Down"), self, activated=lambda: self.tasi(1))
         self.yenile()
 
     def kod(self):
@@ -305,6 +358,31 @@ class Listeler(QtWidgets.QDialog):
 
     def secili(self):
         return [i.text() for i in self.lb.selectedItems()]
+
+    def tasi(self, yon):
+        """Seçili değerleri listede yukarı/aşağı kaydırır; sıra kaydedilir ve tüm açılır listelerde geçerli olur."""
+        sec = self.secili()
+        if not sec:
+            self.app.bilgi("Uyarı", "Önce yerini değiştireceğiniz değer(ler)i seçin.")
+            return
+        eski = [self.lb.item(i).text() for i in range(self.lb.count())]
+        yeni = liste_tasi(eski, sec, yon)
+        if yeni == eski:
+            return
+        _sira_yaz(self.kod(), yeni)
+        self.yenile()
+        ilk = None
+        for i in range(self.lb.count()):
+            if self.lb.item(i).text() in sec:
+                self.lb.item(i).setSelected(True)
+                ilk = ilk if ilk is not None else i
+        if ilk is not None:
+            self.lb.scrollToItem(self.lb.item(ilk))
+
+    def sira_sifirla(self):
+        if _sira_oku(self.kod()) and self.app.sor("Sırayı sıfırla", "Bu listenin özel sırası kaldırılacak, varsayılan sıraya dönülecek. Devam edilsin mi?"):
+            _sira_yaz(self.kod(), [])
+            self.yenile()
 
     def kullanim(self, tur, v):
         return ek.q(f"SELECT COUNT(*) FROM kayit WHERE {tur}=?", (v,))[0][0]  # liste türü adı = kayıt sütun adı
@@ -353,6 +431,14 @@ class Listeler(QtWidgets.QDialog):
             return
         finally:
             con.close()
+        sira = _sira_oku(tur)
+        if eski in sira:   # yeniden adlandırılan değer özel sıradaki yerini korusun
+            yeni_sira = []
+            for d in sira:
+                d = yeni if d == eski else d
+                if d not in yeni_sira:
+                    yeni_sira.append(d)
+            _sira_yaz(tur, yeni_sira)
         self.yenile()
         self.app.undo_temizle()
         self.app.load()
