@@ -56,6 +56,34 @@ GRAFIT = _turet(KOYU, BG="#16171B", KART="#202126", BASLIK="#27282F", BHOV="#313
                 YESIL_ZEMIN="#1D3B30", TURUNCU_ZEMIN="#47361A", KIRMIZI_ZEMIN="#4A2527", SAYI_MAVI="#A78BFA",
                 SAYI_MOR="#F0ABFC")
 
+# Alternatif-tema dalından uyarlanan üç tasarım. Var olan renk anahtarları korunur;
+# böylece grafikler, durum etiketleri ve alt pencereler aynı tema altyapısını kullanır.
+KADASTRO = _turet(KUM, BG="#EDE7DB", KART="#FBF8F1", BASLIK="#F3EEE3", BHOV="#F7F2E8",
+                  METIN="#26211A", SOLUK="#6E6556", KENAR="#DDD5C4", VURGU="#1F5F5B",
+                  VURGU_K="#194F4C", SEC="#DCE9E6", LACIVERT="#1F5F5B", LACIVERT_YAZI="#FBFAF7",
+                  LACIVERT_SOLUK="#D4E3DF", YESIL="#2F6B4F", YESIL_ZEMIN="#DDEBE3",
+                  TURUNCU="#9A6410", TURUNCU_ZEMIN="#F4E7CE", KIRMIZI="#A33A2A",
+                  KIRMIZI_ZEMIN="#F5E0DB", GRI="#6B6459", GRI_ZEMIN="#E7E2D8",
+                  MAVI_ZEMIN="#DEE8F2", SAYI_MAVI="#2A5C8A", SAYI_YESIL="#2F6B4F",
+                  SAYI_KIRMIZI="#A33A2A", SAYI_TURUNCU="#9A6410", SAYI_MOR="#7A5AA8")
+GECE = _turet(KOYU, BG="#14181F", KART="#1B2029", BASLIK="#222833", BHOV="#252C38",
+              METIN="#E8EBF0", SOLUK="#9AA5B4", KENAR="#2C3441", VURGU="#4ECDC4",
+              VURGU_K="#6FDDD5", SEC="#1E3B3C", LACIVERT="#1B2029", LACIVERT_YAZI="#E8EBF0",
+              LACIVERT_SOLUK="#9AA5B4", YESIL="#54C08A", YESIL_ZEMIN="#1D3A2E",
+              TURUNCU="#D9A441", TURUNCU_ZEMIN="#3D3220", KIRMIZI="#E2685C",
+              KIRMIZI_ZEMIN="#432523", GRI="#9AA5B4", GRI_ZEMIN="#2A313C",
+              MAVI_ZEMIN="#1E3348", SAYI_MAVI="#5B9DD9", SAYI_YESIL="#54C08A",
+              SAYI_KIRMIZI="#E2685C", SAYI_TURUNCU="#D9A441", SAYI_MOR="#A88CD4")
+MUREKKEP = _turet(ACIK, BG="#E4E6E4", KART="#FFFFFF", BASLIK="#F1F2F1", BHOV="#EBECEB",
+                  METIN="#111110", SOLUK="#565854", KENAR="#CBCCC9", VURGU="#1C3F94",
+                  VURGU_K="#16357E", SEC="#E1E7F7", LACIVERT="#1C3F94", LACIVERT_YAZI="#FFFFFF",
+                  LACIVERT_SOLUK="#DCE6FF", YESIL="#1F6B45", YESIL_ZEMIN="#DCEBE2",
+                  TURUNCU="#8C5A08", TURUNCU_ZEMIN="#F3E6CB", KIRMIZI="#96281C",
+                  KIRMIZI_ZEMIN="#F3DED9", GRI="#5A564E", GRI_ZEMIN="#E6E3DC",
+                  MAVI_ZEMIN="#E1E7F7", SAYI_MAVI="#1C3F94", SAYI_YESIL="#1F6B45",
+                  SAYI_KIRMIZI="#96281C", SAYI_TURUNCU="#8C5A08", SAYI_MOR="#6B4DA8")
+
+
 # Seçenek listesi (sıra menüde görünen sıradır): anahtar -> (görünen ad, koyu tabanlı mı, jeton sözlüğü).
 # "koyu tabanlı" bayrağı durum renklerinin (pastel / koyu) ve okunaklı yazı tonlarının hangisinden türeyeceğini belirler.
 TEMALAR = {
@@ -66,6 +94,9 @@ TEMALAR = {
     "kum": ("Kum", False, KUM),
     "bordo": ("Bordo", False, BORDO),
     "grafit": ("Grafit", True, GRAFIT),
+    "kadastro": ("Kadastro", False, KADASTRO),
+    "gece": ("Gece", True, GECE),
+    "murekkep": ("Mürekkep", False, MUREKKEP),
 }
 
 
