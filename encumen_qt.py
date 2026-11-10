@@ -852,6 +852,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         for kelimeler, anahtar in ikon_esleme:
             if any(k in alt for k in kelimeler):
                 a.setIcon(ikon_ata(anahtar, boyut=16))
+                a.setProperty("_v11_ikon", anahtar)
                 break
         if kutulu is not None:
             a.setCheckable(True)
@@ -872,6 +873,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         b.setText(metin)
         if ikon_adi:
             b.setIcon(ikon_ata(ikon_adi))
+            b.setProperty("_v11_ikon", ikon_adi)
             b.setIconSize(QtCore.QSize(17, 17))
             b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         b.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -882,6 +884,7 @@ class AnaPencere(QtWidgets.QMainWindow):
         b = QtWidgets.QPushButton(metin)
         if ikon_adi:
             b.setIcon(ikon_ata(ikon_adi))
+            b.setProperty("_v11_ikon", ikon_adi)
             b.setIconSize(QtCore.QSize(17, 17))
         if ad:
             b.setObjectName(ad)
@@ -1171,6 +1174,19 @@ class AnaPencere(QtWidgets.QMainWindow):
         app.setPalette(palet_yap(t))
         app.setStyleSheet(qss_yap(t))
         v11g.font_ata(app)
+        # Tema değişince mevcut ikonları da yeni metin rengine göre yeniden çiz.
+        for w in self.findChildren(QtWidgets.QAbstractButton):
+            anahtar = w.property("_v11_ikon")
+            if anahtar:
+                w.setIcon(ikon_ata(anahtar))
+        for a in self.findChildren(QtGui.QAction):
+            anahtar = a.property("_v11_ikon")
+            if anahtar:
+                a.setIcon(ikon_ata(anahtar, boyut=16))
+        self.nb.setTabIcon(0, ikon_ata("building", boyut=17))
+        self.nb.setTabIcon(1, ikon_ata("chart", boyut=17))
+        self.nb.setTabIcon(2, ikon_ata("folder", boyut=17))
+        self.ara.addAction(ikon_ata("search", boyut=16), QtWidgets.QLineEdit.ActionPosition.LeadingPosition)
         self.tema_dugme.setText("◐  " + et.tema_adi(TEMA_ANAHTAR))  # tıklayınca sıradaki temaya geçer
         self.tema_dugme.setToolTip("Temayı değiştir (Ekran > Tema ile doğrudan seçebilirsiniz)")
         for k, a in self.tema_eylem.items():
