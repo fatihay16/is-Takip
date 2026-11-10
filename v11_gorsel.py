@@ -76,17 +76,19 @@ QLabel#kartBaslik {{ color: {t['SOLUK']}; font-size: 9pt; font-weight: 500; }}
 
 /* Eylemler ve giriş alanları */
 QPushButton {{
-    font-family: {body}; font-size: 9pt; font-weight: 550;
-    border-radius: 7px; padding: 6px 12px;
+    font-family: {body}; font-size: 9.5pt; font-weight: 550;
+    border-radius: 8px; padding: 8px 15px;
+    margin: 1px 2px;
 }}
-QPushButton#vurgu {{ border-radius: 7px; font-weight: 650; }}
+QPushButton#vurgu {{ border-radius: 8px; font-weight: 650; }}
 QToolButton {{
-    font-family: {body}; font-size: 9pt; font-weight: 550;
-    border-radius: 7px; padding: 6px 11px;
+    font-family: {body}; font-size: 9.5pt; font-weight: 550;
+    border-radius: 8px; padding: 8px 13px;
+    margin: 1px 2px;
 }}
 QLineEdit, QComboBox, QSpinBox, QDateEdit, QTextEdit, QPlainTextEdit {{
-    font-family: {body}; font-size: 9pt; border-radius: 7px;
-    padding: 5px 9px;
+    font-family: {body}; font-size: 9.5pt; border-radius: 8px;
+    padding: 7px 10px;
 }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus,
 QTextEdit:focus, QPlainTextEdit:focus {{
@@ -115,7 +117,7 @@ QMenu {{
 }}
 QMenu::item {{
     background: {t['KART']}; color: {t['METIN']};
-    padding: 6px 26px 6px 10px; margin: 2px;
+    padding: 8px 28px 8px 12px; margin: 3px;
     border: 1px solid {t['KENAR']}; border-radius: 5px;
 }}
 QMenu::item:selected {{
@@ -127,7 +129,7 @@ QMenu::separator {{ height: 1px; background: {t['KENAR']}; margin: 4px 7px; }}
 /* Sekmeler, tablo ve detay alanı */
 QTabBar::tab {{
     background: transparent; color: {t['SOLUK']};
-    padding: 8px 17px; margin: 0 4px 0 0;
+    padding: 9px 20px; margin: 0 7px 0 0;
     border: 1px solid transparent; border-radius: 7px;
     font-family: {body}; font-weight: 600;
 }}
