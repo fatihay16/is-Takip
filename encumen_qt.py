@@ -117,8 +117,44 @@ def palet_yap(t):
     return et.palet_yap(t)
 
 
+def ok_ikon_yaz(ad, renk_kodu, yukari=False):
+    """Açılır liste ve sayaç okları için küçük üçgen PNG'si üretir (QSS'teki kenarlık hilesi üçgen yerine gri kutu çiziyordu).
+    Dosya geçici klasöre bir kez yazılır; yolu döndürür."""
+    klasor = os.path.join(tempfile.gettempdir(), "encumen_ikon")
+    os.makedirs(klasor, exist_ok=True)
+    yol = os.path.join(klasor, f"{ad}_{renk_kodu.lstrip('#')}.png")
+    if not os.path.exists(yol):
+        pm = QtGui.QPixmap(12, 8)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QtGui.QPainter(pm)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QtGui.QColor(renk_kodu))
+        nokta = ([(1, 7), (11, 7), (6, 1)] if yukari else [(1, 1), (11, 1), (6, 7)])
+        p.drawPolygon(QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in nokta]))
+        p.end()
+        pm.save(yol, "PNG")
+    return yol.replace("\\", "/")
+
+
+def ok_ikon_qss(t):
+    """Açılır liste (QComboBox) ve sayaç (QSpinBox) okları için tema rengine uygun üçgen resimler. Üretilemezse boş döner
+    (o zaman temanın kendi oku kalır)."""
+    try:
+        asagi, yukari = ok_ikon_yaz("asagi", t["SOLUK"]), ok_ikon_yaz("yukari", t["SOLUK"], True)
+    except Exception:
+        return ""
+    if not (os.path.exists(asagi) and os.path.exists(yukari)):
+        return ""
+    return f"""
+QComboBox::down-arrow {{ image:url("{asagi}"); width:12px; height:8px; border:none; margin-right:8px; }}
+QSpinBox::down-arrow {{ image:url("{asagi}"); width:12px; height:8px; border:none; }}
+QSpinBox::up-arrow {{ image:url("{yukari}"); width:12px; height:8px; border:none; }}
+"""
+
+
 def qss_yap(t):
-    return et.qss_yap(t)
+    return et.qss_yap(t) + ok_ikon_qss(t)
 
 
 # ---------------------------------------------------------------- tablo modeli
@@ -228,6 +264,36 @@ class ListeEditor(QtWidgets.QLineEdit):
         super().mousePressEvent(e)
         if not self.text():
             QtCore.QTimer.singleShot(0, self.hepsini_goster)
+
+
+class ListeKutu(ListeEditor):
+    """Form, Toplu Güncelle ve Fen işlemi penceresindeki seçim kutusu. Tablo hücresinde çalışan liste düzenleyicisiyle aynı
+    yapıdadır (kutuya tıklayınca ya da ▾ ile TÜM liste açılır, yazdıkça daralır; listede olmayan yeni değer de yazılabilir).
+    Pencereler QComboBox gibi kullanabilsin diye currentText / setEditText / lineEdit / activated sunar."""
+    activated = QtCore.Signal(int)
+
+    def __init__(self, degerler):
+        super().__init__(None, degerler, lambda: self.activated.emit(0))
+
+    def currentText(self):
+        return self.text()
+
+    def setEditText(self, metin):
+        self.setText(metin)
+
+    def lineEdit(self):
+        return self
+
+    def mousePressEvent(self, e):
+        QtWidgets.QLineEdit.mousePressEvent(self, e)
+        QtCore.QTimer.singleShot(0, self.hepsini_goster)  # her tıklamada liste açılır
+
+    def keyPressEvent(self, e):
+        c = self.completer()
+        if e.key() == Qt.Key.Key_Down and c is not None and not c.popup().isVisible():
+            self.hepsini_goster()
+            return
+        super().keyPressEvent(e)
 
 
 class HucreDelegate(QtWidgets.QStyledItemDelegate):
@@ -1452,10 +1518,8 @@ class AnaPencere(QtWidgets.QMainWindow):
 
     # ------------------------------------------------ 2. aşama pencereleri
     def liste_combo(self, tur):
-        """Formlardaki aramalı seçim kutusu (yazdıkça daralır). Değerler 'liste' tablosundan gelir."""
-        cb = AramaliCombo(lambda: None)
-        cb.addItems(ek.liste(tur))
-        return cb
+        """Formlardaki seçim kutusu (tıklayınca liste açılır, yazdıkça daralır). Değerler 'liste' tablosundan gelir."""
+        return ListeKutu(ek.liste(tur))
 
     def takvim_sec(self, ust, metin=""):
         """None: iptal, '': temizle, 'gg.aa.yyyy': seçilen tarih."""
