@@ -827,7 +827,7 @@ def takip_sonuc_yaz(takip_db_yolu, work_id, row):
 RENKLER = {"Aktif": "#e3f4e8", "Pasif": "#fde9c9", "Belirsiz": "#fff6cc", "Hata": "#fde2e2"}
 # (zemin, yazı) çiftleri: yazı rengi AÇIKÇA verilir, böylece hangi temada olursa olsun okunur
 PALET_ACIK = {
-    "satir": {"Aktif": ("#e3f4e8", "#14301f"), "Pasif": ("#fde9c9", "#4a2f05"), "Belirsiz": ("#fff6cc", "#4a4010"), "Hata": ("#fde2e2", "#4a1414")},
+    "satir": {"Aktif": "#FFF0A6", "Pasif": "#FFD0A3"},
     "mesaj": {"Aktif": ("#dff0d8", "#1f4d2b"), "Pasif": ("#fcf8e3", "#6b5a2a"), "Belirsiz": ("#fff6cc", "#4a4010"),
               "Hata": ("#f2dede", "#5a1f1f"), "Bekliyor": ("#eeeeee", "#333333")},
     "baslik": "#18334d", "alt": "#586575", "ust_bant": "#1E3A8A",
@@ -836,7 +836,7 @@ PALET_ACIK = {
     "pasif_satir_fg": "#999999",
 }
 PALET_KOYU = {
-    "satir": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"), "Hata": ("#4d2323", "#f9dcdc"), "Bekliyor": ("#263B59", "#DCE9FF")},
+    "satir": {"Aktif": "#FFF0A6", "Pasif": "#FFD0A3"},
     "mesaj": {"Aktif": ("#1f3d2b", "#d7f0df"), "Pasif": ("#4a3a1c", "#fbe9c6"), "Belirsiz": ("#41401f", "#f3efc4"),
               "Hata": ("#4d2323", "#f9dcdc"), "Bekliyor": ("#2b3342", "#e5e7eb")},
     "baslik": "#e5e7eb", "alt": "#9ca3af", "ust_bant": "#172B63",
@@ -1040,11 +1040,10 @@ class ParselModel(QAbstractTableModel):
             return i
         if rol == Qt.ItemDataRole.FontRole and _et and index.column() in (3, 4, 7, 11):   # ada, parsel, alan, son kontrol
             return _et.font_yap(10, mono=True)
+        # Aktif/pasif satır renkleri temadan bağımsızdır; yalnızca arka plan boyanır.
         renk = self.pal["satir"].get(durum)
         if renk and rol == Qt.ItemDataRole.BackgroundRole:
-            return QBrush(QColor(renk[0]))
-        if renk and rol == Qt.ItemDataRole.ForegroundRole:
-            return QBrush(QColor(renk[1]))
+            return QBrush(QColor(renk))
         return None
 
 
