@@ -53,6 +53,23 @@ def ikon(anahtar, renk="#64748B", boyut=18):
             a=math.radians(i*45); p.drawLine(P(9*s+math.cos(a)*5*s,9*s+math.sin(a)*5*s),P(9*s+math.cos(a)*7*s,9*s+math.sin(a)*7*s))
     elif anahtar == "moon":
         path=QtGui.QPainterPath(); path.moveTo(12*s,3*s); path.cubicTo(7*s,3*s,4*s,7*s,5*s,12*s); path.cubicTo(8*s,16*s,14*s,13*s,15*s,9*s); path.cubicTo(12*s,11*s,9*s,8*s,12*s,3*s); p.drawPath(path)
+    elif anahtar == "download":
+        p.drawLine(P(9*s,2*s), P(9*s,11*s))
+        p.drawPolyline(QtGui.QPolygonF([P(5*s,8*s), P(9*s,12*s), P(13*s,8*s)]))
+        p.drawLine(P(3*s,14*s), P(15*s,14*s))
+        p.drawLine(P(3*s,14*s), P(3*s,16*s))
+        p.drawLine(P(15*s,14*s), P(15*s,16*s))
+    elif anahtar == "refresh":
+        import math
+        p.drawArc(R(3*s,3*s,12*s,12*s), 35*16, 285*16)
+        p.drawPolyline(QtGui.QPolygonF([P(12*s,2*s), P(16*s,3*s), P(15*s,7*s)]))
+    elif anahtar == "calendar":
+        p.drawRoundedRect(R(2.5*s,4*s,13*s,11*s), 1.5*s, 1.5*s)
+        p.drawLine(P(2.5*s,7*s), P(15.5*s,7*s))
+        p.drawLine(P(6*s,2*s), P(6*s,5*s))
+        p.drawLine(P(12*s,2*s), P(12*s,5*s))
+        for x in (6*s, 10*s, 13*s):
+            p.drawPoint(P(x,10*s))
     p.end()
     ico=QtGui.QIcon(pm)
     _CACHE[imza]=ico
