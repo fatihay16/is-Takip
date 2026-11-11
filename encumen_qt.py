@@ -405,21 +405,37 @@ class HucreDelegate(QtWidgets.QStyledItemDelegate):
     def paint(self, p, option, index):
         k = ek.TV_COLS[index.column()]
         metin = index.data(Qt.ItemDataRole.DisplayRole)
+        model = index.model()
+        kayit = model.rows[index.row()][1] if hasattr(model, "rows") and index.row() < len(model.rows) else {}
+        durum_rengi = ek.DURUM_UI.get(kayit.get("onay", ""))
+
+        # Alternatif tasarımdaki gibi: her satırın en solunda durum rengiyle ince aksan şeridi.
+        if index.column() == 0:
+            super().paint(p, option, index)
+            if durum_rengi:
+                p.save()
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QtGui.QColor(durum_rengi))
+                p.drawRect(QtCore.QRectF(option.rect.left(), option.rect.top(), 3, option.rect.height()))
+                p.restore()
+            return
+
         if SATIR_BOYA or k != "onay" or not metin:
             return super().paint(p, option, index)
+
         opt = QtWidgets.QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         opt.text = ""
         stil = opt.widget.style() if opt.widget else QtWidgets.QApplication.style()
         stil.drawControl(QtWidgets.QStyle.ControlElement.CE_ItemViewItem, opt, p, opt.widget)
         t = tema()
-        zemin, yazi = et.hap_renkleri(ek.DURUM_UI.get(metin) or t["GRI_ZEMIN"], ek.KOYU)
+        zemin, yazi = et.hap_renkleri(durum_rengi or t["GRI_ZEMIN"], ek.KOYU)
         f = QtGui.QFont(option.font)
         f.setBold(True)
         f.setPointSizeF(max(7.5, f.pointSizeF() - 1))
         fm = QtGui.QFontMetrics(f)
         h = fm.height() + 6
-        genislik = min(fm.horizontalAdvance(metin) + 22, option.rect.width() - 10)
+        genislik = min(fm.horizontalAdvance(metin) + 32, option.rect.width() - 10)
         r = QtCore.QRectF(option.rect.x() + 6, option.rect.center().y() - h / 2, genislik, h)
         p.save()
         p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
@@ -427,8 +443,13 @@ class HucreDelegate(QtWidgets.QStyledItemDelegate):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QtGui.QColor(zemin))
         p.drawRoundedRect(r, h / 2, h / 2)
+        # Rozetin başındaki renkli nokta, satır şeridiyle aynı durum rengini taşır.
+        p.setBrush(QtGui.QColor(yazi))
+        p.drawEllipse(QtCore.QRectF(r.x() + 8, r.center().y() - 3, 6, 6))
         p.setPen(QtGui.QColor(yazi))
-        p.drawText(r, int(Qt.AlignmentFlag.AlignCenter), fm.elidedText(metin, Qt.TextElideMode.ElideRight, int(r.width() - 12)))
+        yazi_alani = QtCore.QRectF(r.x() + 20, r.y(), r.width() - 22, r.height())
+        p.drawText(yazi_alani, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                   fm.elidedText(metin, Qt.TextElideMode.ElideRight, max(0, int(yazi_alani.width() - 4))))
         p.restore()
 
     def _bitir(self, w):
