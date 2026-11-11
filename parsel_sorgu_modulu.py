@@ -1185,7 +1185,8 @@ class Detay(QDialog):
         ly.addLayout(izgara)
         if durum == "Pasif":
             n = QLabel("Not: Pasif parselin alan/niteliği son kayıtlı bilgidir.")
-            n.setStyleSheet(f"color:{(getattr(master, 'tk', None) or {}).get('SOLUK', '#777')};")
+            # Detay penceresinde 'master' yerel değişkeni yoktur; rengi pencerenin paletinden al.
+            n.setStyleSheet(f"color:{self.pal.get('alt', '#777')};")
             ly.addWidget(n)
         ly.addStretch(1)
 
