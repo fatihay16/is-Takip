@@ -1040,10 +1040,14 @@ class ParselModel(QAbstractTableModel):
             return i
         if rol == Qt.ItemDataRole.FontRole and _et and index.column() in (3, 4, 7, 11):   # ada, parsel, alan, son kontrol
             return _et.font_yap(10, mono=True)
-        # Aktif/pasif satır renkleri temadan bağımsızdır; yalnızca arka plan boyanır.
-        renk = self.pal["satir"].get(durum)
+        # Durum metnini eski veritabanı kayıtlarına karşı da güvenli eşleştir.
+        durum_anahtar = str(durum or "").strip().casefold()
+        renkler = {"aktif": "#FFF0A6", "pasif": "#FFD0A3"}
+        renk = renkler.get(durum_anahtar)
         if renk and rol == Qt.ItemDataRole.BackgroundRole:
             return QBrush(QColor(renk))
+        if renk and rol == Qt.ItemDataRole.ForegroundRole:
+            return QBrush(QColor("#3B3020"))
         return None
 
 
@@ -1577,6 +1581,9 @@ class App(QMainWindow):
         self.model = ParselModel(self.pal)
         self.tree = QTableView()
         self.tree.setModel(self.model)
+        # Satır zeminlerini modelin BackgroundRole verisinden al; tema/alternatif satır boyaması ezmesin.
+        self.tree.setAlternatingRowColors(False)
+        self.tree.setAutoFillBackground(True)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
