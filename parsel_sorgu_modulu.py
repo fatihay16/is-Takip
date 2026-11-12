@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QBrush, QPainter, QPen, QFont, QPolygonF, QGui
 from PySide6.QtWidgets import (QApplication, QMainWindow, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                                QPushButton, QCheckBox, QComboBox, QLineEdit, QGroupBox, QTableView, QTableWidget,
                                QTableWidgetItem, QHeaderView, QProgressBar, QSpinBox, QTabWidget, QPlainTextEdit,
-                               QScrollArea, QMessageBox, QFileDialog, QAbstractItemView, QCompleter, QSizePolicy, QFrame, QStyledItemDelegate, QStyleOptionViewItem)
+                               QScrollArea, QMessageBox, QFileDialog, QAbstractItemView, QCompleter, QSizePolicy, QFrame, QStyle, QStyledItemDelegate, QStyleOptionViewItem)
 try:
     import encumen_tema as _et  # ortak kurumsal görünüm (yoksa eski görünüm kullanılır)
 except Exception:
