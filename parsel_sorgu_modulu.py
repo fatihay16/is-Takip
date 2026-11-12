@@ -1005,7 +1005,7 @@ class AramaliKutu(QComboBox):
 
 
 class ParselSatirDelegate(QStyledItemDelegate):
-    """Aktif/pasif satır zeminlerini tema stilinden bağımsız çizer."""
+    """Aktif/pasif satırları QSS stilinden bağımsız olarak doğrudan çizer."""
 
     RENKLER = {
         "aktif": QColor("#FFF0A6"),  # açık sarı
@@ -1013,23 +1013,45 @@ class ParselSatirDelegate(QStyledItemDelegate):
     }
 
     def paint(self, painter, option, index):
-        durum = ""
         model = index.model()
+        durum = ""
         if hasattr(model, "satirlar") and 0 <= index.row() < len(model.satirlar):
             durum = str(model.satirlar[index.row()][1] or "").strip().casefold()
 
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
         renk = self.RENKLER.get(durum)
-        if renk is not None:
-            # Seçili satırda seçim rengi korunsun; normal satırda özel zemin kullanılsın.
-            if not (option.state & QStyle.StateFlag.State_Selected):
-                opt.backgroundBrush = QBrush(renk)
-                opt.palette.setColor(QPalette.ColorRole.Base, renk)
-                opt.palette.setColor(QPalette.ColorRole.AlternateBase, renk)
-            opt.palette.setColor(QPalette.ColorRole.Text, QColor("#3B3020"))
-            opt.palette.setColor(QPalette.ColorRole.WindowText, QColor("#3B3020"))
-        super().paint(painter, opt, index)
+        if renk is None:
+            super().paint(painter, option, index)
+            return
+
+        # Bu iki durum için Qt/QSS'nin arka plan çizimine hiç bırakma:
+        # önce hücreyi kendimiz boya, ardından metni doğrudan çiz.
+        secili = bool(option.state & QStyle.StateFlag.State_Selected)
+        zemin = option.palette.color(QPalette.ColorRole.Highlight) if secili else renk
+        yazi = (option.palette.color(QPalette.ColorRole.HighlightedText)
+                if secili else QColor("#3B3020"))
+
+        painter.save()
+        painter.setClipRect(option.rect)
+        painter.fillRect(option.rect, zemin)
+
+        font = index.data(Qt.ItemDataRole.FontRole)
+        painter.setFont(font if font is not None else option.font)
+
+        hizalama = index.data(Qt.ItemDataRole.TextAlignmentRole)
+        if hizalama is None:
+            hizalama = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        else:
+            hizalama = Qt.AlignmentFlag(hizalama) | Qt.AlignmentFlag.AlignVCenter
+
+        metin = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        metin_alani = option.rect.adjusted(6, 0, -6, 0)
+        painter.setPen(yazi)
+        painter.drawText(metin_alani, hizalama, metin)
+
+        # Hücreler arasındaki ince ayırıcı çizgiyi koru.
+        painter.setPen(QColor("#D8CFAF") if not secili else zemin.darker(115))
+        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+        painter.restore()
 
 
 class ParselModel(QAbstractTableModel):
