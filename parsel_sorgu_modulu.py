@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QBrush, QPainter, QPen, QFont, QPolygonF, QGui
 from PySide6.QtWidgets import (QApplication, QMainWindow, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                                QPushButton, QCheckBox, QComboBox, QLineEdit, QGroupBox, QTableView, QTableWidget,
                                QTableWidgetItem, QHeaderView, QProgressBar, QSpinBox, QTabWidget, QPlainTextEdit,
-                               QScrollArea, QMessageBox, QFileDialog, QAbstractItemView, QCompleter, QSizePolicy, QFrame)
+                               QScrollArea, QMessageBox, QFileDialog, QAbstractItemView, QCompleter, QSizePolicy, QFrame, QStyledItemDelegate, QStyleOptionViewItem)
 try:
     import encumen_tema as _et  # ortak kurumsal görünüm (yoksa eski görünüm kullanılır)
 except Exception:
@@ -1004,6 +1004,34 @@ class AramaliKutu(QComboBox):
         self.secildi.emit()
 
 
+class ParselSatirDelegate(QStyledItemDelegate):
+    """Aktif/pasif satır zeminlerini tema stilinden bağımsız çizer."""
+
+    RENKLER = {
+        "aktif": QColor("#FFF0A6"),  # açık sarı
+        "pasif": QColor("#FFD0A3"),  # açık turuncu
+    }
+
+    def paint(self, painter, option, index):
+        durum = ""
+        model = index.model()
+        if hasattr(model, "satirlar") and 0 <= index.row() < len(model.satirlar):
+            durum = str(model.satirlar[index.row()][1] or "").strip().casefold()
+
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        renk = self.RENKLER.get(durum)
+        if renk is not None:
+            # Seçili satırda seçim rengi korunsun; normal satırda özel zemin kullanılsın.
+            if not (option.state & QStyle.StateFlag.State_Selected):
+                opt.backgroundBrush = QBrush(renk)
+                opt.palette.setColor(QPalette.ColorRole.Base, renk)
+                opt.palette.setColor(QPalette.ColorRole.AlternateBase, renk)
+            opt.palette.setColor(QPalette.ColorRole.Text, QColor("#3B3020"))
+            opt.palette.setColor(QPalette.ColorRole.WindowText, QColor("#3B3020"))
+        super().paint(painter, opt, index)
+
+
 class ParselModel(QAbstractTableModel):
     BASLIK = ["İl", "İlçe", "Mahalle", "Ada", "Parsel", "İş kayıt no", "Parsel durumu", "Alan (m²)", "Nitelik",
               "Yeni parseller", "Pasif işlemi", "Son kontrol"]
@@ -1581,7 +1609,8 @@ class App(QMainWindow):
         self.model = ParselModel(self.pal)
         self.tree = QTableView()
         self.tree.setModel(self.model)
-        # Satır zeminlerini modelin BackgroundRole verisinden al; tema/alternatif satır boyaması ezmesin.
+        # QSS stillerinin model BackgroundRole rengini ezmesini önlemek için özel satır çizici.
+        self.tree.setItemDelegate(ParselSatirDelegate(self.tree))
         self.tree.setAlternatingRowColors(False)
         self.tree.setAutoFillBackground(True)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
